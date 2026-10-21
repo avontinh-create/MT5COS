@@ -1,0 +1,14 @@
+# Bỏ qua môi trường ảo
+venv/
+env/
+
+# Bỏ qua các file rác sinh ra khi Python biên dịch
+__pycache__/
+*.pyc
+
+# Bỏ qua file chứa biến môi trường nhạy cảm (mật khẩu, API key)
+.env
+
+# Bỏ qua các thư mục dữ liệu sinh ra khi chạy backtest
+workspace/temp_configs/
+workspace/reports/
