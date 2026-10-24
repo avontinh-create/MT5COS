@@ -159,7 +159,7 @@ ToDate={to_date}
 TestExpertParameters={os.path.abspath(set_file_path)}
 Report={os.path.abspath(report_path)}
 ReplaceReport=1
-ShutdownTerminal=0
+ShutdownTerminal=1
 """
         ini_path = os.path.join(self.temp_configs_dir, f"trial_{trial_id}.ini")
         with open(ini_path, "w", encoding="utf-8", newline="") as ini_file:

@@ -14,11 +14,18 @@ ARRAY_OPTIMIZATION_RELATIVE_PERCENT = 0.12
 
 
 class AIOptimizer:
-    def __init__(self, terminal_path: str, base_workspace: str, account_info: dict):
+    def __init__(
+        self,
+        terminal_path: str,
+        base_workspace: str,
+        account_info: dict,
+        offline_mode: bool = False,
+    ):
         self.builder = MT5ConfigBuilder(base_workspace)
         self.runner = MT5BacktestRunner(terminal_path)
         self.parser = ReportParser()
         self.account_info = account_info
+        self.offline_mode = offline_mode
         self.reports_dir = os.path.join(base_workspace, "reports")
         os.makedirs(self.reports_dir, exist_ok=True)
 
@@ -195,6 +202,17 @@ class AIOptimizer:
         set_path = self.builder.build_set_file(
             self.base_set_data, new_values, trial_id
         )
+        if self.offline_mode:
+            score = 0.0
+            for key, value in new_values.items():
+                limits = self.optimizable_params[key]
+                midpoint = (limits["start"] + limits["stop"]) / 2
+                half_range = (limits["stop"] - limits["start"]) / 2
+                if half_range:
+                    normalized_distance = (float(value) - midpoint) / half_range
+                    score -= normalized_distance**2
+            return score
+
         report_path = os.path.join(self.reports_dir, f"report_trial_{trial_id}.htm")
         ini_path = self.builder.build_ini_file(
             trial_id=trial_id,
@@ -210,19 +228,27 @@ class AIOptimizer:
             to_date=to_date,
         )
 
-        if not self.runner.run_backtest(ini_path):
-            raise RuntimeError(
-                f"MT5 exited with a non-zero status for optimization trial {trial.number}."
-            )
+        try:
+            if not self.runner.run_backtest(ini_path):
+                raise RuntimeError(
+                    "MT5 exited with a non-zero status for optimization "
+                    f"trial {trial.number}."
+                )
 
-        metrics = self.parser.parse_html_report(report_path)
-        drawdown = max(metrics["MaxDrawdown"], 0.1)
-        score = (metrics["NetProfit"] * metrics["ProfitFactor"]) / drawdown
-        if not math.isfinite(score):
-            raise ValueError(
-                f"MT5 report produced a non-finite score for trial {trial.number}."
-            )
-        return score
+            metrics = self.parser.parse_html_report(report_path)
+            drawdown = max(metrics["MaxDrawdown"], 0.1)
+            score = (metrics["NetProfit"] * metrics["ProfitFactor"]) / drawdown
+            if not math.isfinite(score):
+                raise ValueError(
+                    "MT5 report produced a non-finite score for "
+                    f"trial {trial.number}."
+                )
+            return score
+        finally:
+            try:
+                os.remove(ini_path)
+            except FileNotFoundError:
+                pass
 
     def run(
         self,
@@ -266,4 +292,5 @@ class AIOptimizer:
             "best_value": study.best_value,
             "best_params": study.best_params,
             "best_set_file": best_set,
+            "mode": "offline_simulation" if self.offline_mode else "mt5",
         }
