@@ -9,6 +9,9 @@ __pycache__/
 # Bỏ qua file chứa biến môi trường nhạy cảm (mật khẩu, API key)
 .env
 
+# Bỏ qua toàn bộ bản cài MT5 portable (chứa nhiều file chương trình bên thứ ba)
+mt5_portable/
+
 # Bỏ qua các thư mục dữ liệu sinh ra khi chạy backtest
 workspace/temp_configs/
 workspace/reports/
