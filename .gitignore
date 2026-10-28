@@ -15,3 +15,5 @@ mt5_portable/
 # Bỏ qua các thư mục dữ liệu sinh ra khi chạy backtest
 workspace/temp_configs/
 workspace/reports/
+workspace/jobs/
+workspace/jobs.sqlite3*

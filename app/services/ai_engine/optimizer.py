@@ -3,6 +3,7 @@ import os
 import re
 import uuid
 from pathlib import Path
+from typing import Callable
 
 import optuna
 
@@ -294,6 +295,7 @@ class AIOptimizer:
         leverage: int = 100,
         model: int = 1,
         execution_mode: int = 0,
+        progress_callback: Callable[[int, int, float | None], None] | None = None,
     ) -> dict:
         if not self.base_set_data or not self.optimizable_params:
             raise RuntimeError("Call setup_task with an optimizable .set file first.")
@@ -331,6 +333,26 @@ class AIOptimizer:
                 n_startup_trials=min(5, n_trials)
             ),
         )
+        def update_progress(
+            current_study: optuna.Study,
+            completed_trial: optuna.trial.FrozenTrial,
+        ) -> None:
+            if progress_callback is None:
+                return
+            best_value = (
+                current_study.best_value
+                if any(
+                    trial.state == optuna.trial.TrialState.COMPLETE
+                    for trial in current_study.trials
+                )
+                else None
+            )
+            progress_callback(
+                completed_trial.number + 1,
+                n_trials,
+                best_value,
+            )
+
         study.optimize(
             lambda trial: self.objective(
                 trial,
@@ -346,6 +368,7 @@ class AIOptimizer:
                 execution_mode,
             ),
             n_trials=n_trials,
+            callbacks=[update_progress],
         )
 
         best_set = self.builder.build_set_file(

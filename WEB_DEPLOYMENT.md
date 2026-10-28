@@ -46,8 +46,15 @@ Open `https://your-domain.example/ui` and authenticate with
 the UI, API, downloads, and API documentation. HTTPS is required because
 browser Basic authentication sends credentials with each request.
 
+Optimization requests are persisted as jobs in `workspace/jobs.sqlite3` and
+processed one at a time by a background worker. The browser polls `/jobs/{id}`
+for queued/running/completed/failed status and trial progress. A running job
+is marked failed after an application restart; queued jobs are resumed. Uploaded
+input files are removed when a job finishes.
+
 The current implementation is intended for a single operator and a single
-portable MT5 terminal. Do not run multiple API workers or expose the service
-without HTTPS. MT5 symbol discovery requires that the portable terminal is not
-already running; the app then resolves the uploaded set file's `CurrencyList`
-against symbols supplied by the configured broker.
+portable MT5 terminal. Run exactly one API worker; multiple Uvicorn workers
+would each start a worker and could race for the same MT5 terminal. Do not
+expose the service without HTTPS. MT5 symbol discovery requires that the
+portable terminal is not already running; the app then resolves the uploaded
+set file's `CurrencyList` against symbols supplied by the configured broker.

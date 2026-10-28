@@ -146,6 +146,21 @@ class OptimizerCredentialCleanupTests(unittest.TestCase):
             [],
         )
 
+    def test_run_reports_background_trial_progress(self):
+        self.optimizer.offline_mode = True
+        progress_updates = []
+
+        result = self.optimizer.run(
+            n_trials=2,
+            progress_callback=lambda completed, total, best: progress_updates.append(
+                (completed, total, best)
+            ),
+        )
+
+        self.assertEqual(len(progress_updates), 2)
+        self.assertEqual([update[0:2] for update in progress_updates], [(1, 2), (2, 2)])
+        self.assertEqual(result["best_value"], progress_updates[-1][2])
+
 
 if __name__ == "__main__":
     unittest.main()

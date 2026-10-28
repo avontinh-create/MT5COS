@@ -5,23 +5,153 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MT5 AI Optimizer</title>
   <style>
-    :root { color-scheme: light; font-family: "Segoe UI", Arial, sans-serif; color: #172033; background: #f3f6fb; }
-    body { margin: 0; padding: 32px 16px; }
-    main { max-width: 860px; margin: auto; padding: 28px; background: white; border: 1px solid #dfe5ef; border-radius: 12px; box-shadow: 0 8px 28px #17203312; }
-    h1 { margin: 0 0 8px; font-size: 25px; }
-    p { color: #566176; line-height: 1.5; }
-    fieldset { margin: 22px 0; padding: 18px; border: 1px solid #dfe5ef; border-radius: 9px; }
-    legend { padding: 0 8px; font-weight: 650; }
-    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
-    label { display: grid; gap: 6px; font-size: 14px; font-weight: 600; }
-    input, select, button { box-sizing: border-box; width: 100%; padding: 10px 11px; border: 1px solid #c8d1df; border-radius: 6px; background: white; color: inherit; font: inherit; }
-    input[type="file"] { padding: 8px; }
-    button { border: 0; background: #1769d2; color: white; font-weight: 650; cursor: pointer; }
-    button:disabled { opacity: .6; cursor: wait; }
-    .help { margin: 3px 0 0; font-size: 12px; color: #68758a; font-weight: 400; }
-    #status { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 20px; }
-    #status a { display: inline-block; margin: 6px 12px 0 0; }
-    @media (max-width: 620px) { .grid { grid-template-columns: 1fr; } main { padding: 20px; } }
+    :root {
+      color-scheme: dark;
+      font-family: "Segoe UI", Arial, sans-serif;
+      color: #e8f1fb;
+      background: #071426;
+      font-synthesis: none;
+    }
+    body {
+      min-height: 100vh;
+      margin: 0;
+      padding: 48px 18px;
+      background:
+        radial-gradient(ellipse at 8% 5%, #12375a 0, transparent 35%),
+        radial-gradient(ellipse at 94% 88%, #0c3b4a 0, transparent 30%),
+        #071426;
+    }
+    main {
+      box-sizing: border-box;
+      max-width: 900px;
+      margin: auto;
+      padding: 34px;
+      overflow: hidden;
+      background: linear-gradient(150deg, #10243b, #0d1d32 72%);
+      border: 1px solid #25415c;
+      border-top: 5px solid #ff4fa3;
+      border-radius: 16px;
+      box-shadow: 0 26px 70px #02081299, 0 3px 12px #02081266;
+    }
+    h1 {
+      margin: 0 0 10px;
+      color: #f0f7ff;
+      font-size: 28px;
+      letter-spacing: -.5px;
+    }
+    p { color: #a9bbce; line-height: 1.6; }
+    fieldset {
+      margin: 26px 0;
+      padding: 22px;
+      background: linear-gradient(135deg, #152b43, #12253b);
+      border: 1px solid #2a4661;
+      border-radius: 12px;
+    }
+    legend {
+      padding: 7px 12px;
+      color: #75f1e7;
+      background: #4a1d3c;
+      border: 1px solid #8e376c;
+      border-radius: 20px;
+      font-size: 14px;
+      font-weight: 700;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px 20px;
+    }
+    label {
+      display: grid;
+      gap: 7px;
+      color: #d3e2f1;
+      font-size: 13px;
+      font-weight: 650;
+    }
+    input, select, button {
+      box-sizing: border-box;
+      width: 100%;
+      min-height: 43px;
+      padding: 10px 12px;
+      color: #112840;
+      background: #f1f7fc;
+      border: 1px solid #8da7bd;
+      border-radius: 8px;
+      font: inherit;
+      transition: border-color .16s ease, box-shadow .16s ease, background .16s ease;
+    }
+    input:hover, select:hover { border-color: #ff76b5; }
+    input:focus, select:focus {
+      outline: none;
+      border-color: #ed3f91;
+      box-shadow: 0 0 0 3px #ff4fa344;
+    }
+    input::placeholder { color: #6e8398; }
+    input[type="file"] {
+      padding: 6px;
+      color: #d7e4f0;
+      background: #142a41;
+      border-color: #36536d;
+    }
+    input[type="file"]::file-selector-button {
+      margin-right: 10px;
+      padding: 7px 10px;
+      color: #571337;
+      background: #ffb0d5;
+      border: 0;
+      border-radius: 6px;
+      font: inherit;
+      font-weight: 650;
+      cursor: pointer;
+    }
+    button {
+      min-height: 48px;
+      margin-top: 8px;
+      color: #fff;
+      background: linear-gradient(110deg, #d92e83, #ff5ca8);
+      border: 0;
+      border-radius: 9px;
+      box-shadow: 0 8px 22px #ff4fa344;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button:hover:not(:disabled) {
+      background: linear-gradient(110deg, #bd216f, #ed408f);
+      box-shadow: 0 10px 24px #ff4fa355;
+      transform: translateY(-1px);
+    }
+    button:focus-visible { outline: 3px solid #ff4fa3aa; outline-offset: 3px; }
+    button:disabled { opacity: .62; cursor: wait; box-shadow: none; }
+    .help { margin: 3px 0 0; color: #96abc0; font-size: 12px; font-weight: 400; }
+    #status {
+      margin-top: 20px;
+      padding: 0;
+      color: #d6e5f3;
+      overflow-wrap: anywhere;
+      white-space: pre-wrap;
+    }
+    #status:not(:empty) {
+      padding: 14px 16px;
+      background: #351c36;
+      border: 1px solid #77406d;
+      border-radius: 9px;
+    }
+    #status a {
+      display: inline-block;
+      margin: 6px 14px 0 0;
+      color: #ff91c4;
+      font-weight: 650;
+      text-decoration-thickness: 1px;
+      text-underline-offset: 3px;
+    }
+    #status a:hover { color: #ffd1e6; }
+    @media (max-width: 620px) {
+      body { padding: 20px 12px; }
+      main { padding: 24px 18px; border-radius: 12px; }
+      h1 { font-size: 24px; }
+      fieldset { padding: 18px 14px; }
+      .grid { grid-template-columns: 1fr; gap: 15px; }
+    }
   </style>
 </head>
 <body>
@@ -111,7 +241,7 @@
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     button.disabled = true;
-    status.textContent = "Đang chạy Strategy Tester; vui lòng chờ...";
+    status.textContent = "Đang đưa yêu cầu vào hàng đợi...";
     try {
       const response = await fetch("/optimize", {
         method: "POST",
@@ -122,12 +252,38 @@
         throw new Error(result.detail || "Không thể chạy tối ưu.");
       }
 
+      const jobId = result.job_id;
+      let job;
+      do {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        const jobResponse = await fetch(`/jobs/${encodeURIComponent(jobId)}`);
+        const jobData = await jobResponse.json();
+        if (!jobResponse.ok) {
+          throw new Error(jobData.detail || "Không thể đọc trạng thái job.");
+        }
+        job = jobData;
+        if (job.status === "queued") {
+          status.textContent = "Job đang chờ đến lượt chạy...";
+        } else if (job.status === "running") {
+          const progress = `${job.completed_trials}/${job.total_trials} lượt`;
+          const best = job.best_value === null ? "" : ` · Best score: ${job.best_value}`;
+          status.textContent = `Đang chạy Strategy Tester: ${progress}${best}`;
+        }
+      } while (job.status === "queued" || job.status === "running");
+
+      if (job.status !== "completed") {
+        throw new Error(
+          job.error || `Job kết thúc với trạng thái ${job.status}.`
+        );
+      }
+
+      const completed = job.result;
       status.replaceChildren();
       const summary = document.createElement("p");
-      summary.textContent = `Hoàn tất. Best score: ${result.best_value}`;
+      summary.textContent = `Hoàn tất ${job.completed_trials}/${job.total_trials} lượt. Best score: ${completed.best_value}`;
       status.appendChild(summary);
-      addLink(status, result.download_url, `Tải file .set tốt nhất: ${result.best_set_file}`);
-      for (const report of result.excel_reports) {
+      addLink(status, completed.download_url, `Tải file .set tốt nhất: ${completed.best_set_file}`);
+      for (const report of completed.excel_reports) {
         addLink(status, report.download_url, `Tải Excel: ${report.filename}`);
       }
     } catch (error) {

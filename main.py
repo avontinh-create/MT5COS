@@ -2,6 +2,7 @@ import base64
 import binascii
 import hmac
 import os
+import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -11,16 +12,33 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 
+from app.services.ai_engine.job_manager import JobStore, OptimizationJobManager
 from app.services.ai_engine.optimizer import AIOptimizer
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 WORKSPACE_DIR = PROJECT_ROOT / "workspace"
-UPLOADS_DIR = WORKSPACE_DIR / "inputs"
+JOBS_DIR = WORKSPACE_DIR / "jobs"
+JOB_DATABASE_PATH = WORKSPACE_DIR / "jobs.sqlite3"
 MAX_SET_FILE_SIZE = 10 * 1024 * 1024
 
 load_dotenv(PROJECT_ROOT / ".env")
 app = FastAPI(title="MT5 AI Optimizer API")
+job_manager = OptimizationJobManager(
+    JobStore(JOB_DATABASE_PATH),
+    JOBS_DIR,
+    lambda config, progress: _execute_optimization_job(config, progress),
+)
+
+
+@app.on_event("startup")
+def start_optimization_jobs():
+    job_manager.start()
+
+
+@app.on_event("shutdown")
+def stop_optimization_jobs():
+    job_manager.stop()
 
 
 @app.middleware("http")
@@ -112,6 +130,86 @@ def _validate_expert_file(terminal_path: Path, expert_name: str):
         )
 
 
+def _execute_optimization_job(config: dict, progress_callback) -> dict:
+    required_account_vars = ("MT5_LOGIN", "MT5_PASSWORD", "MT5_SERVER")
+    account_info = {name: os.getenv(name) for name in required_account_vars}
+    missing_account_vars = [
+        name for name, value in account_info.items() if not value
+    ]
+    if missing_account_vars:
+        raise RuntimeError(
+            "Missing MT5 account settings in .env: "
+            + ", ".join(missing_account_vars)
+        )
+
+    terminal_path = _configured_path(
+        "MT5_TERMINAL_PATH", PROJECT_ROOT / "mt5_portable" / "terminal64.exe"
+    )
+    if not terminal_path.is_file():
+        raise FileNotFoundError(f"MT5 terminal was not found at {terminal_path}.")
+    _validate_expert_file(terminal_path, config["expert_name"])
+
+    job_directory = JOBS_DIR / config["job_id"]
+    set_file_path = job_directory / "parameters.set"
+    optimization_path = (
+        job_directory / "optimization_ranges.set"
+        if config["has_optimization_file"]
+        else None
+    )
+    optimizer = AIOptimizer(
+        terminal_path=str(terminal_path),
+        base_workspace=str(WORKSPACE_DIR),
+        account_info={
+            "login": account_info["MT5_LOGIN"],
+            "password": account_info["MT5_PASSWORD"],
+            "server": account_info["MT5_SERVER"],
+        },
+    )
+    parsed_set = optimizer.builder.parse_set_file(str(set_file_path))
+    available_symbols = None
+    if parsed_set.get("CurrencyList") is not None:
+        available_symbols = optimizer.runner.get_available_symbols(
+            account_info["MT5_LOGIN"],
+            account_info["MT5_PASSWORD"],
+            account_info["MT5_SERVER"],
+        )
+    optimizer.setup_task(
+        str(set_file_path),
+        config["expert_name"],
+        optimization_set_file_path=(
+            str(optimization_path) if optimization_path is not None else None
+        ),
+        available_symbols=available_symbols,
+    )
+    result = optimizer.run(
+        n_trials=config["n_trials"],
+        symbol=config["symbol"],
+        period=config["period"],
+        from_date=config["from_date"],
+        to_date=config["to_date"],
+        deposit=config["deposit"],
+        currency=config["currency"],
+        leverage=config["leverage"],
+        model=config["model"],
+        execution_mode=config["execution_mode"],
+        progress_callback=progress_callback,
+    )
+    best_set_name = Path(result["best_set_file"]).name
+    return {
+        "best_value": result["best_value"],
+        "best_params": result["best_params"],
+        "best_set_file": best_set_name,
+        "download_url": f"/results/{best_set_name}",
+        "excel_reports": [
+            {
+                "filename": filename,
+                "download_url": f"/reports/{filename}",
+            }
+            for filename in result["excel_reports"]
+        ],
+    }
+
+
 @app.get("/")
 def read_root():
     return {
@@ -127,7 +225,7 @@ def optimizer_interface():
     return FileResponse(PROJECT_ROOT / "web" / "optimizer.html")
 
 
-@app.post("/optimize")
+@app.post("/optimize", status_code=202)
 def optimize_uploaded_set(
     file: UploadFile = File(...),
     optimization_file: UploadFile | None = File(None),
@@ -209,78 +307,78 @@ def optimize_uploaded_set(
         )
     _validate_expert_file(terminal_path, expert_name)
 
-    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
-    set_file_path = UPLOADS_DIR / f"upload_{uuid.uuid4().hex}.set"
-    optimization_set_file_path = None
-    optimizer = AIOptimizer(
-        terminal_path=str(terminal_path),
-        base_workspace=str(WORKSPACE_DIR),
-        account_info={
-            "login": account_info["MT5_LOGIN"],
-            "password": account_info["MT5_PASSWORD"],
-            "server": account_info["MT5_SERVER"],
-        },
+    job_id = uuid.uuid4().hex
+    job_directory = JOBS_DIR / job_id
+    set_file_path = job_directory / "parameters.set"
+    optimization_set_file_path = (
+        job_directory / "optimization_ranges.set"
+        if optimization_file is not None
+        else None
     )
+    has_optimization_file = optimization_file is not None
     try:
+        job_directory.mkdir(parents=True, exist_ok=False)
         set_file_path.write_bytes(content)
-        if optimization_file is not None:
-            optimization_set_file_path = (
-                UPLOADS_DIR / f"optimization_{uuid.uuid4().hex}.set"
-            )
+        if optimization_set_file_path is not None:
             optimization_set_file_path.write_bytes(optimization_content)
 
-        parsed_set = optimizer.builder.parse_set_file(str(set_file_path))
-        available_symbols = None
-        if parsed_set.get("CurrencyList") is not None:
-            available_symbols = optimizer.runner.get_available_symbols(
-                account_info["MT5_LOGIN"],
-                account_info["MT5_PASSWORD"],
-                account_info["MT5_SERVER"],
-            )
-
-        optimizer.setup_task(
-            str(set_file_path),
-            expert_name,
-            optimization_set_file_path=(
-                str(optimization_set_file_path)
-                if optimization_set_file_path is not None
-                else None
-            ),
-            available_symbols=available_symbols,
-        )
-        result = optimizer.run(
-            n_trials=n_trials,
-            symbol=symbol,
-            period=period,
-            from_date=from_date,
-            to_date=to_date,
-            deposit=deposit,
-            currency=currency.upper(),
-            leverage=leverage,
-            model=model,
-            execution_mode=execution_mode,
-        )
-    except (FileNotFoundError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except (RuntimeError, TimeoutError) as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    finally:
-        set_file_path.unlink(missing_ok=True)
+        validation_builder = AIOptimizer(
+            terminal_path=str(terminal_path),
+            base_workspace=str(WORKSPACE_DIR),
+            account_info={
+                "login": "",
+                "password": "",
+                "server": "",
+            },
+        ).builder
+        validation_builder.parse_set_file(str(set_file_path))
         if optimization_set_file_path is not None:
-            optimization_set_file_path.unlink(missing_ok=True)
+            validation_builder.parse_set_file(str(optimization_set_file_path))
+        config = {
+            "job_id": job_id,
+            "has_optimization_file": has_optimization_file,
+            "expert_name": expert_name,
+            "symbol": symbol,
+            "period": period,
+            "n_trials": n_trials,
+            "from_date": from_date,
+            "to_date": to_date,
+            "deposit": deposit,
+            "currency": currency.upper(),
+            "leverage": leverage,
+            "model": model,
+            "execution_mode": execution_mode,
+        }
+        job_manager.submit(job_id, config, n_trials)
+    except (FileNotFoundError, ValueError) as exc:
+        shutil.rmtree(job_directory, ignore_errors=True)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception:
+        shutil.rmtree(job_directory, ignore_errors=True)
+        raise
 
     return {
-        "best_value": result["best_value"],
-        "best_params": result["best_params"],
-        "best_set_file": Path(result["best_set_file"]).name,
-        "download_url": f"/results/{Path(result['best_set_file']).name}",
-        "excel_reports": [
-            {
-                "filename": filename,
-                "download_url": f"/reports/{filename}",
-            }
-            for filename in result["excel_reports"]
-        ],
+        "job_id": job_id,
+        "status": "queued",
+        "status_url": f"/jobs/{job_id}",
+    }
+
+
+@app.get("/jobs/{job_id}")
+def get_optimization_job(job_id: str):
+    job = job_manager.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Optimization job not found.")
+    return {
+        "job_id": job["job_id"],
+        "status": job["status"],
+        "created_at": job["created_at"],
+        "updated_at": job["updated_at"],
+        "completed_trials": job["completed_trials"],
+        "total_trials": job["total_trials"],
+        "best_value": job["best_value"],
+        "error": job["error"],
+        "result": job["result"],
     }
 
 
