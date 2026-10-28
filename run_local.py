@@ -1,12 +1,24 @@
 
+import argparse
 import os
 from pathlib import Path
+import uuid
 
 from dotenv import load_dotenv
 from app.services.ai_engine.optimizer import AIOptimizer
+from app.services.mt5_engine.builder import MT5ConfigBuilder
+from app.services.mt5_engine.runner import MT5BacktestRunner
 
 
-def main():
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Run the local MT5 optimizer.")
+    parser.add_argument(
+        "--login-check",
+        action="store_true",
+        help="Open MT5 with .env credentials without starting the Strategy Tester.",
+    )
+    args = parser.parse_args(argv)
+
     project_root = Path(__file__).resolve().parent
     load_dotenv(project_root / ".env")
     offline_mode = os.getenv("MT5_DRY_RUN", "").strip().lower() in {
@@ -79,6 +91,30 @@ def main():
         "server": os.getenv("MT5_SERVER", ""),
     }
 
+    if args.login_check:
+        if offline_mode:
+            raise RuntimeError("--login-check cannot be used with MT5_DRY_RUN enabled.")
+
+        builder = MT5ConfigBuilder(str(project_root / "workspace"))
+        login_ini_path = builder.build_login_ini_file(
+            config_id=uuid.uuid4().hex,
+            login=ACCOUNT_INFO["login"],
+            password=ACCOUNT_INFO["password"],
+            server=ACCOUNT_INFO["server"],
+        )
+        try:
+            print(
+                "[*] Opening MT5 for login verification. Close the terminal "
+                "when you are done, then check its Journal for connection status."
+            )
+            MT5BacktestRunner(str(terminal_path)).open_login_terminal(login_ini_path)
+        finally:
+            try:
+                os.remove(login_ini_path)
+            except FileNotFoundError:
+                pass
+        return
+
     optimizer = AIOptimizer(
         terminal_path=str(terminal_path),
         base_workspace=str(project_root / "workspace"),
@@ -86,20 +122,50 @@ def main():
         offline_mode=offline_mode,
     )
 
+    available_symbols = None
+    base_set_data = optimizer.builder.parse_set_file(SET_FILE_PATH)
+    backtest_symbol = optimizer.builder.get_first_currency_symbol(base_set_data)
+    if not offline_mode:
+        available_symbols = optimizer.runner.get_available_symbols(
+            ACCOUNT_INFO["login"],
+            ACCOUNT_INFO["password"],
+            ACCOUNT_INFO["server"],
+        )
+        backtest_symbol = optimizer.builder.resolve_broker_symbol(
+            backtest_symbol, available_symbols
+        )
+        print(
+            f"[*] Resolved tester symbol for {ACCOUNT_INFO['server']}: "
+            f"{backtest_symbol}"
+        )
+    else:
+        print(f"[*] Using first symbol from .set for tester: {backtest_symbol}")
+
     # 3. Nạp cấu hình
     print("[*] Loading configuration...")
     optimizer.setup_task(
         set_file_path=SET_FILE_PATH,
         expert_name=EXPERT_NAME,
         optimization_set_file_path=str(optimization_set_path),
+        available_symbols=available_symbols,
     )
+    if optimizer.resolved_currency_symbols:
+        print(
+            "[*] Resolved EA CurrencyList: "
+            + ", ".join(
+                f"{source} -> {resolved}"
+                for source, resolved in optimizer.resolved_currency_symbols.items()
+            )
+        )
     
     # 4. Bắt đầu lặp 10 vòng
     print("[*] Starting optimization...")
-    result = optimizer.run(n_trials=10)
+    result = optimizer.run(n_trials=10, symbol=backtest_symbol)
     print(f"Best score: {result['best_value']}")
     print(f"Best parameters: {result['best_params']}")
     print(f"Best .set file: {result['best_set_file']}")
+    for report_file in result["excel_reports"]:
+        print(f"Excel report: {project_root / 'workspace' / 'reports' / report_file}")
     if result["mode"] == "offline_simulation":
         print(
             "[!] This only verifies the optimization flow; it is not an EA "

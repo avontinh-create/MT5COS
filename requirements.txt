@@ -8,3 +8,6 @@ lxml
 python-dotenv
 python-multipart
 python-multipart
+MetaTrader5
+openpyxl
+pillow

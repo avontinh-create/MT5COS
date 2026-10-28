@@ -46,10 +46,24 @@ class OptimizerCredentialCleanupTests(unittest.TestCase):
         )
 
     def test_ini_is_removed_after_successful_backtest(self):
-        def run_backtest(ini_path):
+        trial_set_paths = []
+
+        def run_backtest(ini_path, set_file_path=None, report_path=None):
             content = Path(ini_path).read_text(encoding="utf-8")
             self.assertIn(f"Password={self.password}", content)
             self.assertIn("ShutdownTerminal=1", content)
+            self.assertIn("Deposit=25000", content)
+            self.assertIn("Currency=EUR", content)
+            self.assertIn("Leverage=200", content)
+            self.assertIn("Model=0", content)
+            self.assertIn("ExecutionMode=1", content)
+            self.assertTrue(Path(set_file_path).is_file())
+            trial_set_paths.append(Path(set_file_path))
+            self.assertEqual(Path(report_path).name, "report_trial_run_0.htm")
+            Path(report_path).write_text(
+                "<html><table><tr><td>Summary</td></tr></table></html>",
+                encoding="utf-8",
+            )
             return True
 
         self.optimizer.runner.run_backtest = Mock(side_effect=run_backtest)
@@ -62,14 +76,32 @@ class OptimizerCredentialCleanupTests(unittest.TestCase):
         )
 
         score = self.optimizer.objective(
-            FixedTrial(), "run", "EURUSD", "H1", "2023.01.01", "2023.12.31"
+            FixedTrial(),
+            "run",
+            "EURUSD",
+            "H1",
+            "2023.01.01",
+            "2023.12.31",
+            deposit=25000,
+            currency="EUR",
+            leverage=200,
+            model=0,
+            execution_mode=1,
         )
 
         self.assertEqual(score, 4.0)
         self.assertFalse(self.ini_path.exists())
+        self.assertEqual(len(trial_set_paths), 1)
+        self.assertFalse(trial_set_paths[0].exists())
 
     def test_ini_is_removed_when_backtest_fails(self):
-        self.optimizer.runner.run_backtest = Mock(return_value=False)
+        trial_set_paths = []
+
+        def run_backtest(ini_path, set_file_path=None, report_path=None):
+            trial_set_paths.append(Path(set_file_path))
+            return False
+
+        self.optimizer.runner.run_backtest = Mock(side_effect=run_backtest)
 
         with self.assertRaisesRegex(RuntimeError, "non-zero status"):
             self.optimizer.objective(
@@ -77,6 +109,8 @@ class OptimizerCredentialCleanupTests(unittest.TestCase):
             )
 
         self.assertFalse(self.ini_path.exists())
+        self.assertEqual(len(trial_set_paths), 1)
+        self.assertFalse(trial_set_paths[0].exists())
 
     def test_ini_is_removed_when_report_parsing_fails(self):
         self.optimizer.runner.run_backtest = Mock(return_value=True)
@@ -90,6 +124,27 @@ class OptimizerCredentialCleanupTests(unittest.TestCase):
             )
 
         self.assertFalse(self.ini_path.exists())
+
+    def test_trial_set_is_removed_in_offline_mode(self):
+        self.optimizer.offline_mode = True
+        score = self.optimizer.objective(
+            FixedTrial(),
+            "offline",
+            "EURUSD",
+            "H1",
+            "2023.01.01",
+            "2023.12.31",
+        )
+
+        self.assertEqual(score, -1.0)
+        self.assertEqual(
+            list(
+                Path(self.optimizer.builder.temp_configs_dir).glob(
+                    "trial_offline_0.set"
+                )
+            ),
+            [],
+        )
 
 
 if __name__ == "__main__":

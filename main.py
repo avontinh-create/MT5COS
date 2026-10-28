@@ -1,3 +1,6 @@
+import base64
+import binascii
+import hmac
 import os
 import uuid
 from datetime import datetime
@@ -5,8 +8,8 @@ from pathlib import Path
 
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 from app.services.ai_engine.optimizer import AIOptimizer
 
@@ -18,6 +21,50 @@ MAX_SET_FILE_SIZE = 10 * 1024 * 1024
 
 load_dotenv(PROJECT_ROOT / ".env")
 app = FastAPI(title="MT5 AI Optimizer API")
+
+
+@app.middleware("http")
+async def require_web_auth(request: Request, call_next):
+    username = os.getenv("MT5_WEB_USERNAME", "")
+    password = os.getenv("MT5_WEB_PASSWORD", "")
+    if (
+        not username
+        or username == "change-this-username"
+        or len(password) < 16
+        or password == "replace-with-a-long-random-password"
+    ):
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Web authentication is not configured."},
+        )
+
+    authorization = request.headers.get("authorization", "")
+    scheme, separator, encoded_credentials = authorization.partition(" ")
+    if scheme.lower() != "basic" or not separator:
+        return Response(
+            status_code=401,
+            headers={"WWW-Authenticate": 'Basic realm="MT5 AI Optimizer"'},
+        )
+
+    try:
+        decoded_credentials = base64.b64decode(
+            encoded_credentials, validate=True
+        ).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError):
+        decoded_credentials = ""
+
+    supplied_username, separator, supplied_password = decoded_credentials.partition(":")
+    if (
+        not separator
+        or not hmac.compare_digest(supplied_username, username)
+        or not hmac.compare_digest(supplied_password, password)
+    ):
+        return Response(
+            status_code=401,
+            headers={"WWW-Authenticate": 'Basic realm="MT5 AI Optimizer"'},
+        )
+
+    return await call_next(request)
 
 
 def _configured_path(variable: str, default: Path) -> Path:
@@ -69,9 +116,15 @@ def _validate_expert_file(terminal_path: Path, expert_name: str):
 def read_root():
     return {
         "message": "MT5 AI Optimizer API",
+        "interface": "/ui",
         "upload_endpoint": "/optimize",
         "documentation": "/docs",
     }
+
+
+@app.get("/ui")
+def optimizer_interface():
+    return FileResponse(PROJECT_ROOT / "web" / "optimizer.html")
 
 
 @app.post("/optimize")
@@ -84,6 +137,11 @@ def optimize_uploaded_set(
     n_trials: int = Form(10, ge=1, le=1000),
     from_date: str = Form("2023.01.01"),
     to_date: str = Form("2023.12.31"),
+    deposit: float = Form(10000, gt=0),
+    currency: str = Form("USD", min_length=3, max_length=3),
+    leverage: int = Form(100, ge=1, le=10000),
+    model: int = Form(1, ge=0, le=4),
+    execution_mode: int = Form(0, ge=0, le=1),
 ):
     if not file.filename or Path(file.filename).suffix.lower() != ".set":
         raise HTTPException(status_code=400, detail="Upload a .set parameter file.")
@@ -117,6 +175,16 @@ def optimize_uploaded_set(
             )
 
     from_date, to_date = _validate_dates(from_date, to_date)
+    if not currency.isascii() or not currency.isalpha():
+        raise HTTPException(
+            status_code=422, detail="Tester currency must be a three-letter code."
+        )
+    if model not in {0, 1, 2, 4}:
+        raise HTTPException(
+            status_code=422,
+            detail="Select a financial tick model (Every tick, 1 minute OHLC, "
+            "Open prices, or Real ticks).",
+        )
     required_account_vars = ("MT5_LOGIN", "MT5_PASSWORD", "MT5_SERVER")
     account_info = {name: os.getenv(name) for name in required_account_vars}
     missing_account_vars = [
@@ -143,13 +211,7 @@ def optimize_uploaded_set(
 
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     set_file_path = UPLOADS_DIR / f"upload_{uuid.uuid4().hex}.set"
-    set_file_path.write_bytes(content)
-    if optimization_file is not None:
-        optimization_set_file_path = (
-            UPLOADS_DIR / f"optimization_{uuid.uuid4().hex}.set"
-        )
-        optimization_set_file_path.write_bytes(optimization_content)
-
+    optimization_set_file_path = None
     optimizer = AIOptimizer(
         terminal_path=str(terminal_path),
         base_workspace=str(WORKSPACE_DIR),
@@ -160,6 +222,22 @@ def optimize_uploaded_set(
         },
     )
     try:
+        set_file_path.write_bytes(content)
+        if optimization_file is not None:
+            optimization_set_file_path = (
+                UPLOADS_DIR / f"optimization_{uuid.uuid4().hex}.set"
+            )
+            optimization_set_file_path.write_bytes(optimization_content)
+
+        parsed_set = optimizer.builder.parse_set_file(str(set_file_path))
+        available_symbols = None
+        if parsed_set.get("CurrencyList") is not None:
+            available_symbols = optimizer.runner.get_available_symbols(
+                account_info["MT5_LOGIN"],
+                account_info["MT5_PASSWORD"],
+                account_info["MT5_SERVER"],
+            )
+
         optimizer.setup_task(
             str(set_file_path),
             expert_name,
@@ -168,25 +246,41 @@ def optimize_uploaded_set(
                 if optimization_set_file_path is not None
                 else None
             ),
+            available_symbols=available_symbols,
+        )
+        result = optimizer.run(
+            n_trials=n_trials,
+            symbol=symbol,
+            period=period,
+            from_date=from_date,
+            to_date=to_date,
+            deposit=deposit,
+            currency=currency.upper(),
+            leverage=leverage,
+            model=model,
+            execution_mode=execution_mode,
         )
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (RuntimeError, TimeoutError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     finally:
+        set_file_path.unlink(missing_ok=True)
         if optimization_set_file_path is not None:
             optimization_set_file_path.unlink(missing_ok=True)
 
-    result = optimizer.run(
-        n_trials=n_trials,
-        symbol=symbol,
-        period=period,
-        from_date=from_date,
-        to_date=to_date,
-    )
     return {
         "best_value": result["best_value"],
         "best_params": result["best_params"],
         "best_set_file": Path(result["best_set_file"]).name,
         "download_url": f"/results/{Path(result['best_set_file']).name}",
+        "excel_reports": [
+            {
+                "filename": filename,
+                "download_url": f"/reports/{filename}",
+            }
+            for filename in result["excel_reports"]
+        ],
     }
 
 
@@ -203,6 +297,25 @@ def download_best_set_file(filename: str):
     if not result_path.is_file():
         raise HTTPException(status_code=404, detail="Result file not found.")
     return FileResponse(result_path, filename=filename, media_type="application/octet-stream")
+
+
+@app.get("/reports/{filename}")
+def download_excel_report(filename: str):
+    if (
+        Path(filename).name != filename
+        or not filename.startswith("report_trial_")
+        or not filename.endswith(".xlsx")
+    ):
+        raise HTTPException(status_code=404, detail="Excel report not found.")
+
+    report_path = WORKSPACE_DIR / "reports" / filename
+    if not report_path.is_file():
+        raise HTTPException(status_code=404, detail="Excel report not found.")
+    return FileResponse(
+        report_path,
+        filename=filename,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 if __name__ == "__main__":

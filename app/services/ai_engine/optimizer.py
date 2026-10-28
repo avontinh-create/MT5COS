@@ -2,11 +2,13 @@ import math
 import os
 import re
 import uuid
+from pathlib import Path
 
 import optuna
 
 from app.services.mt5_engine.builder import MT5ConfigBuilder
 from app.services.mt5_engine.parser import ReportParser
+from app.services.mt5_engine.report_exporter import MT5ReportExporter
 from app.services.mt5_engine.runner import MT5BacktestRunner
 
 
@@ -24,6 +26,7 @@ class AIOptimizer:
         self.builder = MT5ConfigBuilder(base_workspace)
         self.runner = MT5BacktestRunner(terminal_path)
         self.parser = ReportParser()
+        self.report_exporter = MT5ReportExporter()
         self.account_info = account_info
         self.offline_mode = offline_mode
         self.reports_dir = os.path.join(base_workspace, "reports")
@@ -32,12 +35,14 @@ class AIOptimizer:
         self.base_set_data = {}
         self.optimizable_params = {}
         self.expert_name = ""
+        self.resolved_currency_symbols = {}
 
     def setup_task(
         self,
         set_file_path: str,
         expert_name: str,
         optimization_set_file_path: str | None = None,
+        available_symbols: list[str] | None = None,
     ):
         if not os.path.isfile(set_file_path):
             raise FileNotFoundError(f"Input .set file not found: {set_file_path}")
@@ -57,6 +62,10 @@ class AIOptimizer:
             raise ValueError("EA expert name must end with .ex5.")
 
         self.base_set_data = self.builder.parse_set_file(set_file_path)
+        if available_symbols is not None:
+            self.resolved_currency_symbols = self.builder.resolve_broker_symbols(
+                self.base_set_data, available_symbols
+            )
         optimization_data = self.base_set_data
         if optimization_set_file_path is not None:
             optimization_data = self.builder.parse_set_file(
@@ -163,6 +172,11 @@ class AIOptimizer:
         period: str,
         from_date: str,
         to_date: str,
+        deposit: float = 10000,
+        currency: str = "USD",
+        leverage: int = 100,
+        model: int = 1,
+        execution_mode: int = 0,
     ) -> float:
         new_values = {}
         for key, limits in self.optimizable_params.items():
@@ -202,40 +216,56 @@ class AIOptimizer:
         set_path = self.builder.build_set_file(
             self.base_set_data, new_values, trial_id
         )
-        if self.offline_mode:
-            score = 0.0
-            for key, value in new_values.items():
-                limits = self.optimizable_params[key]
-                midpoint = (limits["start"] + limits["stop"]) / 2
-                half_range = (limits["stop"] - limits["start"]) / 2
-                if half_range:
-                    normalized_distance = (float(value) - midpoint) / half_range
-                    score -= normalized_distance**2
-            return score
-
-        report_path = os.path.join(self.reports_dir, f"report_trial_{trial_id}.htm")
-        ini_path = self.builder.build_ini_file(
-            trial_id=trial_id,
-            expert_name=self.expert_name,
-            symbol=symbol,
-            period=period,
-            set_file_path=set_path,
-            report_path=report_path,
-            login=self.account_info["login"],
-            password=self.account_info["password"],
-            server=self.account_info["server"],
-            from_date=from_date,
-            to_date=to_date,
-        )
-
+        ini_path = None
         try:
-            if not self.runner.run_backtest(ini_path):
+            if self.offline_mode:
+                score = 0.0
+                for key, value in new_values.items():
+                    limits = self.optimizable_params[key]
+                    midpoint = (limits["start"] + limits["stop"]) / 2
+                    half_range = (limits["stop"] - limits["start"]) / 2
+                    if half_range:
+                        normalized_distance = (float(value) - midpoint) / half_range
+                        score -= normalized_distance**2
+                return score
+
+            report_path = os.path.join(
+                self.reports_dir, f"report_trial_{trial_id}.htm"
+            )
+            ini_path = self.builder.build_ini_file(
+                trial_id=trial_id,
+                expert_name=self.expert_name,
+                symbol=symbol,
+                period=period,
+                set_file_path=set_path,
+                report_path=report_path,
+                login=self.account_info["login"],
+                password=self.account_info["password"],
+                server=self.account_info["server"],
+                from_date=from_date,
+                to_date=to_date,
+                deposit=deposit,
+                currency=currency,
+                leverage=leverage,
+                model=model,
+                execution_mode=execution_mode,
+            )
+
+            if not self.runner.run_backtest(
+                ini_path,
+                set_file_path=set_path,
+                report_path=report_path,
+            ):
                 raise RuntimeError(
                     "MT5 exited with a non-zero status for optimization "
                     f"trial {trial.number}."
                 )
 
             metrics = self.parser.parse_html_report(report_path)
+            self.report_exporter.export(
+                report_path,
+                os.path.splitext(report_path)[0] + ".xlsx",
+            )
             drawdown = max(metrics["MaxDrawdown"], 0.1)
             score = (metrics["NetProfit"] * metrics["ProfitFactor"]) / drawdown
             if not math.isfinite(score):
@@ -245,18 +275,25 @@ class AIOptimizer:
                 )
             return score
         finally:
-            try:
-                os.remove(ini_path)
-            except FileNotFoundError:
-                pass
+            for generated_path in (ini_path, set_path):
+                if generated_path is not None:
+                    try:
+                        os.remove(generated_path)
+                    except FileNotFoundError:
+                        pass
 
     def run(
         self,
         n_trials: int = 10,
         symbol: str = "EURUSD",
         period: str = "H1",
-        from_date: str = "2023.01.01",
-        to_date: str = "2023.12.31",
+        from_date: str = "2025.09.01",
+        to_date: str = "2026.09.01",
+        deposit: float = 10000,
+        currency: str = "USD",
+        leverage: int = 100,
+        model: int = 1,
+        execution_mode: int = 0,
     ) -> dict:
         if not self.base_set_data or not self.optimizable_params:
             raise RuntimeError("Call setup_task with an optimizable .set file first.")
@@ -270,6 +307,22 @@ class AIOptimizer:
         ):
             if not value or "\n" in value or "\r" in value:
                 raise ValueError(f"{label} must be a non-empty single-line value.")
+        if deposit <= 0 or not math.isfinite(deposit):
+            raise ValueError("Tester deposit must be a positive finite number.")
+        if (
+            len(currency) != 3
+            or not currency.isascii()
+            or not currency.isalpha()
+        ):
+            raise ValueError("Tester currency must be a three-letter code.")
+        if leverage < 1:
+            raise ValueError("Tester leverage must be greater than zero.")
+        if model not in {0, 1, 2, 4}:
+            raise ValueError(
+                "Tester model must be 0, 1, 2, or 4 for financial testing."
+            )
+        if execution_mode not in {0, 1}:
+            raise ValueError("Execution mode must be 0 (no delay) or 1 (random).")
 
         run_id = uuid.uuid4().hex
         study = optuna.create_study(
@@ -280,7 +333,17 @@ class AIOptimizer:
         )
         study.optimize(
             lambda trial: self.objective(
-                trial, run_id, symbol, period, from_date, to_date
+                trial,
+                run_id,
+                symbol,
+                period,
+                from_date,
+                to_date,
+                deposit,
+                currency,
+                leverage,
+                model,
+                execution_mode,
             ),
             n_trials=n_trials,
         )
@@ -288,9 +351,14 @@ class AIOptimizer:
         best_set = self.builder.build_set_file(
             self.base_set_data, study.best_params, f"{run_id}_BEST_RESULT"
         )
+        excel_reports = sorted(
+            os.path.basename(path)
+            for path in Path(self.reports_dir).glob(f"report_trial_{run_id}_*.xlsx")
+        )
         return {
             "best_value": study.best_value,
             "best_params": study.best_params,
             "best_set_file": best_set,
+            "excel_reports": excel_reports,
             "mode": "offline_simulation" if self.offline_mode else "mt5",
         }

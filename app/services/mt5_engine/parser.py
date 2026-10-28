@@ -39,11 +39,17 @@ class ReportParser:
         cells = [cell.get_text(" ", strip=True) for cell in soup.find_all("td")]
         metrics = {}
         for index, label in enumerate(cells[:-1]):
-            normalized_label = " ".join(label.split()).casefold()
+            normalized_label = " ".join(label.split()).casefold().rstrip(":")
             next_value = cells[index + 1]
             if normalized_label == "total net profit":
                 metrics["NetProfit"] = self._number(next_value, "net profit")
-            elif "maximal drawdown" in normalized_label:
+            elif normalized_label in {
+                "maximal drawdown",
+                "equity drawdown maximal",
+            } or (
+                normalized_label == "balance drawdown maximal"
+                and "MaxDrawdown" not in metrics
+            ):
                 percent = re.search(r"\(\s*([-+]?\d[\d\s,]*(?:\.\d+)?)\s*%\s*\)", next_value)
                 if percent is None:
                     raise ValueError(

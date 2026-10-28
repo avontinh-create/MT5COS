@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MT5 AI Optimizer</title>
+  <style>
+    :root { color-scheme: light; font-family: "Segoe UI", Arial, sans-serif; color: #172033; background: #f3f6fb; }
+    body { margin: 0; padding: 32px 16px; }
+    main { max-width: 860px; margin: auto; padding: 28px; background: white; border: 1px solid #dfe5ef; border-radius: 12px; box-shadow: 0 8px 28px #17203312; }
+    h1 { margin: 0 0 8px; font-size: 25px; }
+    p { color: #566176; line-height: 1.5; }
+    fieldset { margin: 22px 0; padding: 18px; border: 1px solid #dfe5ef; border-radius: 9px; }
+    legend { padding: 0 8px; font-weight: 650; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    label { display: grid; gap: 6px; font-size: 14px; font-weight: 600; }
+    input, select, button { box-sizing: border-box; width: 100%; padding: 10px 11px; border: 1px solid #c8d1df; border-radius: 6px; background: white; color: inherit; font: inherit; }
+    input[type="file"] { padding: 8px; }
+    button { border: 0; background: #1769d2; color: white; font-weight: 650; cursor: pointer; }
+    button:disabled { opacity: .6; cursor: wait; }
+    .help { margin: 3px 0 0; font-size: 12px; color: #68758a; font-weight: 400; }
+    #status { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 20px; }
+    #status a { display: inline-block; margin: 6px 12px 0 0; }
+    @media (max-width: 620px) { .grid { grid-template-columns: 1fr; } main { padding: 20px; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>MT5 AI Optimizer</h1>
+  <p>Chọn tham số EA và cấu hình Strategy Tester trước khi chạy. Thông tin tài khoản MT5 được đọc từ file .env; tên symbol trong CurrencyList sẽ được tự khớp với broker.</p>
+  <form id="optimizer-form">
+    <fieldset>
+      <legend>EA và dữ liệu tối ưu</legend>
+      <div class="grid">
+        <label>File tham số EA (.set)
+          <input name="file" type="file" accept=".set" required>
+        </label>
+        <label>File phạm vi tối ưu (.set), nếu có
+          <input name="optimization_file" type="file" accept=".set">
+        </label>
+        <label>Tên EA (.ex5)
+          <input name="expert_name" value="" placeholder="Ví dụ: Peak.ex5" required>
+        </label>
+        <label>Symbol
+          <input name="symbol" value="EURUSD" required>
+        </label>
+        <label>Khung thời gian
+          <select name="period">
+            <option>M1</option><option>M5</option><option>M15</option><option>M30</option>
+            <option selected>H1</option><option>H4</option><option>D1</option><option>W1</option><option>MN1</option>
+          </select>
+        </label>
+        <label>Số lượt tối ưu
+          <input name="n_trials" type="number" min="1" max="1000" value="10" required>
+        </label>
+        <label>Từ ngày (YYYY.MM.DD)
+          <input name="from_date" value="2023.01.01" pattern="\d{4}\.\d{2}\.\d{2}" required>
+        </label>
+        <label>Đến ngày (YYYY.MM.DD)
+          <input name="to_date" value="2023.12.31" pattern="\d{4}\.\d{2}\.\d{2}" required>
+        </label>
+      </div>
+    </fieldset>
+    <fieldset>
+      <legend>Strategy Tester</legend>
+      <div class="grid">
+        <label>Tiền nạp ban đầu
+          <input name="deposit" type="number" min="0.01" step="any" value="10000" required>
+        </label>
+        <label>Đồng tiền tài khoản
+          <input name="currency" value="USD" minlength="3" maxlength="3" pattern="[A-Za-z]{3}" required>
+        </label>
+        <label>Đòn bẩy (ví dụ 100 = 1:100)
+          <input name="leverage" type="number" min="1" max="10000" step="1" value="100" required>
+        </label>
+        <label>Mô hình giá
+          <select name="model">
+            <option value="0">Every tick</option>
+            <option value="1" selected>1 minute OHLC</option>
+            <option value="2">Open prices only</option>
+            <option value="4">Every tick based on real ticks</option>
+          </select>
+        </label>
+        <label>Độ trễ khớp lệnh
+          <select name="execution_mode">
+            <option value="0" selected>Zero latency, ideal execution</option>
+            <option value="1">Random delay</option>
+          </select>
+          <span class="help">Random delay mô phỏng độ trễ ngẫu nhiên của lệnh.</span>
+        </label>
+      </div>
+    </fieldset>
+    <p class="help">MT5 optimization được giữ ở Disabled vì AI Optimizer tự tạo từng lượt thử. Chế độ Math calculations không dùng được để chấm điểm hiệu suất tài chính.</p>
+    <button id="submit-button" type="submit">Bắt đầu tối ưu</button>
+  </form>
+  <section id="status" aria-live="polite"></section>
+</main>
+<script>
+  const form = document.getElementById("optimizer-form");
+  const button = document.getElementById("submit-button");
+  const status = document.getElementById("status");
+
+  function addLink(parent, href, text) {
+    const link = document.createElement("a");
+    link.href = href;
+    link.textContent = text;
+    link.download = "";
+    parent.appendChild(link);
+  }
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    button.disabled = true;
+    status.textContent = "Đang chạy Strategy Tester; vui lòng chờ...";
+    try {
+      const response = await fetch("/optimize", {
+        method: "POST",
+        body: new FormData(form),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.detail || "Không thể chạy tối ưu.");
+      }
+
+      status.replaceChildren();
+      const summary = document.createElement("p");
+      summary.textContent = `Hoàn tất. Best score: ${result.best_value}`;
+      status.appendChild(summary);
+      addLink(status, result.download_url, `Tải file .set tốt nhất: ${result.best_set_file}`);
+      for (const report of result.excel_reports) {
+        addLink(status, report.download_url, `Tải Excel: ${report.filename}`);
+      }
+    } catch (error) {
+      status.textContent = `Lỗi: ${error.message}`;
+    } finally {
+      button.disabled = false;
+    }
+  });
+</script>
+</body>
+</html>
