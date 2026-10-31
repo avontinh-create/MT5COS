@@ -3,6 +3,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from app.services.mt5_engine.builder import MT5ConfigBuilder
@@ -11,6 +12,55 @@ from app.services.mt5_engine.runner import MT5BacktestRunner
 
 
 class MT5BacktestRunnerTests(unittest.TestCase):
+    def test_connection_check_reports_broker_without_exposing_login(self):
+        with tempfile.TemporaryDirectory() as directory:
+            terminal = Path(directory) / "terminal64.exe"
+            terminal.touch()
+            mt5 = Mock()
+            mt5.initialize.return_value = True
+            mt5.account_info.return_value = SimpleNamespace(
+                login=1234,
+                server="Broker-Demo",
+                currency="USD",
+            )
+            mt5.terminal_info.return_value = SimpleNamespace(
+                connected=True,
+                build=5000,
+            )
+
+            with (
+                patch.dict(sys.modules, {"MetaTrader5": mt5}),
+                patch.object(MT5BacktestRunner, "_terminal_process_ids", return_value=set()),
+            ):
+                result = MT5BacktestRunner(str(terminal)).check_connection(
+                    "1234", "secret", "Broker-Demo"
+                )
+
+            self.assertEqual(
+                result,
+                {
+                    "connected": True,
+                    "server": "Broker-Demo",
+                    "currency": "USD",
+                    "terminal_build": 5000,
+                },
+            )
+            self.assertNotIn("login", result)
+            mt5.shutdown.assert_called_once()
+
+    def test_connection_check_rejects_an_existing_terminal_session(self):
+        with tempfile.TemporaryDirectory() as directory:
+            terminal = Path(directory) / "terminal64.exe"
+            terminal.touch()
+            runner = MT5BacktestRunner(str(terminal))
+            with patch.object(
+                MT5BacktestRunner, "_terminal_process_ids", return_value={42}
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError, "Close the portable MT5 terminal"
+                ):
+                    runner.check_connection("1234", "secret", "Broker-Demo")
+
     def test_parses_actual_mt5_report_summary_labels(self):
         with tempfile.TemporaryDirectory() as directory:
             report = Path(directory) / "report.htm"

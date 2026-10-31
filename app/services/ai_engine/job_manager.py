@@ -13,6 +13,10 @@ from typing import Callable
 logger = logging.getLogger(__name__)
 
 
+class JobQueueFullError(RuntimeError):
+    pass
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -116,9 +120,29 @@ class JobStore:
         with self._connection() as connection:
             rows = connection.execute(
                 "SELECT job_id FROM optimization_jobs "
-                "WHERE status = 'queued' ORDER BY created_at"
+                "WHERE status = 'queued' ORDER BY created_at, rowid"
             ).fetchall()
         return [row["job_id"] for row in rows]
+
+    def queued_count(self) -> int:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS count FROM optimization_jobs "
+                "WHERE status = 'queued'"
+            ).fetchone()
+        return row["count"]
+
+    def queue_snapshot(self) -> tuple[list[str], int]:
+        with self._connection() as connection:
+            queued_rows = connection.execute(
+                "SELECT job_id FROM optimization_jobs "
+                "WHERE status = 'queued' ORDER BY created_at, rowid"
+            ).fetchall()
+            running_row = connection.execute(
+                "SELECT COUNT(*) AS count FROM optimization_jobs "
+                "WHERE status = 'running'"
+            ).fetchone()
+        return [row["job_id"] for row in queued_rows], running_row["count"]
 
     def fail_interrupted_jobs(self) -> list[str]:
         with self._connection() as connection:
@@ -144,13 +168,18 @@ class OptimizationJobManager:
         store: JobStore,
         jobs_directory: str | Path,
         run_job: Callable[[dict, Callable[[int, int, float | None], None]], dict],
+        maximum_queued_jobs: int = 5,
     ):
+        if maximum_queued_jobs < 1:
+            raise ValueError("maximum_queued_jobs must be greater than zero.")
         self.store = store
         self.jobs_directory = Path(jobs_directory).resolve()
         self.run_job = run_job
+        self.maximum_queued_jobs = maximum_queued_jobs
         self._queue: queue.Queue[str | None] = queue.Queue()
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
+        self._submit_lock = threading.Lock()
         self._stop_event = threading.Event()
 
     def start(self) -> None:
@@ -173,11 +202,29 @@ class OptimizationJobManager:
         self._stop_event.set()
 
     def submit(self, job_id: str, config: dict, total_trials: int) -> None:
-        self.store.create(job_id, config, total_trials)
-        self._queue.put(job_id)
+        with self._submit_lock:
+            if self.store.queued_count() >= self.maximum_queued_jobs:
+                raise JobQueueFullError(
+                    "The optimization queue is full. Wait for a queued job to start."
+                )
+            self.store.create(job_id, config, total_trials)
+            self._queue.put(job_id)
 
     def get(self, job_id: str) -> dict | None:
         return self.store.get(job_id)
+
+    def queue_status(self, job_id: str | None = None) -> dict:
+        queued_job_ids, running_jobs = self.store.queue_snapshot()
+        return {
+            "queued_jobs": len(queued_job_ids),
+            "running_jobs": running_jobs,
+            "maximum_queued_jobs": self.maximum_queued_jobs,
+            "queue_position": (
+                queued_job_ids.index(job_id) + 1
+                if job_id in queued_job_ids
+                else None
+            ),
+        }
 
     def _work(self) -> None:
         while True:

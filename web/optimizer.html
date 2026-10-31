@@ -145,6 +145,18 @@
       text-underline-offset: 3px;
     }
     #status a:hover { color: #ffd1e6; }
+    #system-status {
+      display: grid;
+      gap: 8px;
+      margin: 20px 0;
+      padding: 18px;
+      background: #102840;
+      border: 1px solid #2a4661;
+      border-radius: 12px;
+    }
+    #system-status h2 { margin: 0; font-size: 17px; color: #f0f7ff; }
+    #system-status p { margin: 0; font-size: 13px; overflow-wrap: anywhere; }
+    #system-status button { max-width: 260px; }
     @media (max-width: 620px) {
       body { padding: 20px 12px; }
       main { padding: 24px 18px; border-radius: 12px; }
@@ -158,6 +170,13 @@
 <main>
   <h1>MT5 AI Optimizer</h1>
   <p>Chọn tham số EA và cấu hình Strategy Tester trước khi chạy. Thông tin tài khoản MT5 được đọc từ file .env; tên symbol trong CurrencyList sẽ được tự khớp với broker.</p>
+  <section id="system-status" aria-live="polite">
+    <h2>Trạng thái MT5</h2>
+    <p id="system-status-details">Đang kiểm tra cấu hình máy chủ...</p>
+    <button id="connection-check-button" type="button">Kiểm tra kết nối broker</button>
+    <p id="connection-status"></p>
+    <span class="help">Kiểm tra sẽ tạm khởi chạy terminal MT5 và đóng phiên kiểm tra sau đó; không đặt lệnh giao dịch. Hãy đóng MT5 portable trước khi kiểm tra.</span>
+  </section>
   <form id="optimizer-form">
     <fieldset>
       <legend>EA và dữ liệu tối ưu</legend>
@@ -181,7 +200,7 @@
           </select>
         </label>
         <label>Số lượt tối ưu
-          <input name="n_trials" type="number" min="1" max="1000" value="10" required>
+          <input name="n_trials" type="number" min="1" max="100" value="10" required>
         </label>
         <label>Từ ngày (YYYY.MM.DD)
           <input name="from_date" value="2023.01.01" pattern="\d{4}\.\d{2}\.\d{2}" required>
@@ -221,6 +240,7 @@
       </div>
     </fieldset>
     <p class="help">MT5 optimization được giữ ở Disabled vì AI Optimizer tự tạo từng lượt thử. Chế độ Math calculations không dùng được để chấm điểm hiệu suất tài chính.</p>
+    <p class="help">Giới hạn tải: tối đa 100 lượt/job, 5 job chờ trong hàng đợi và 3 yêu cầu tối ưu/phút cho mỗi IP. Khi chạm giới hạn, hãy chờ job hoặc thời gian giới hạn kết thúc rồi thử lại.</p>
     <button id="submit-button" type="submit">Bắt đầu tối ưu</button>
   </form>
   <section id="status" aria-live="polite"></section>
@@ -229,6 +249,87 @@
   const form = document.getElementById("optimizer-form");
   const button = document.getElementById("submit-button");
   const status = document.getElementById("status");
+  const systemStatusDetails = document.getElementById("system-status-details");
+  const connectionCheckButton = document.getElementById("connection-check-button");
+  const connectionStatus = document.getElementById("connection-status");
+
+  async function readJobUntilFinished(jobId, onUpdate) {
+    let job;
+    do {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      const response = await fetch(`/jobs/${encodeURIComponent(jobId)}`);
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || "Không thể đọc trạng thái job.");
+      }
+      job = data;
+      onUpdate(job);
+    } while (job.status === "queued" || job.status === "running");
+    if (job.status !== "completed") {
+      throw new Error(job.error || `Job kết thúc với trạng thái ${job.status}.`);
+    }
+    return job;
+  }
+
+  async function loadSystemStatus() {
+    try {
+      const response = await fetch("/system/status");
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || "Không thể đọc cấu hình máy chủ.");
+      }
+      const labels = {
+        application: "Web API",
+        mt5_package: "Thư viện MT5",
+        account: "Thông tin tài khoản",
+        terminal: "Terminal MT5",
+        expert: "EA",
+        broker: "Kết nối broker",
+      };
+      const stateLabels = {
+        ready: "sẵn sàng",
+        missing: "thiếu",
+        configured: "đã cấu hình",
+        available: "có sẵn",
+        not_configured: "chưa cấu hình",
+        not_checked: "chưa kiểm tra",
+      };
+      systemStatusDetails.textContent = Object.entries(labels)
+        .map(([key, label]) => `${label}: ${stateLabels[data[key].status] || data[key].status}`)
+        .join(" · ") +
+        ` · Hàng đợi: ${data.jobs.queued_jobs}/${data.jobs.maximum_queued_jobs} job chờ` +
+        ` · Đang chạy: ${data.jobs.running_jobs}`;
+    } catch (error) {
+      systemStatusDetails.textContent = `Không thể kiểm tra cấu hình: ${error.message}`;
+    }
+  }
+
+  connectionCheckButton.addEventListener("click", async () => {
+    connectionCheckButton.disabled = true;
+    connectionStatus.textContent = "Đang xếp hàng kiểm tra kết nối...";
+    try {
+      const response = await fetch("/connection-check", { method: "POST" });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.detail || "Không thể bắt đầu kiểm tra kết nối.");
+      }
+      const job = await readJobUntilFinished(result.job_id, (current) => {
+        connectionStatus.textContent = current.status === "queued"
+          ? `Đang chờ MT5: vị trí ${current.queue_position}/${current.queued_jobs}...`
+          : "Đang kết nối tới broker...";
+      });
+      connectionStatus.textContent =
+        `Đã kết nối broker ${job.result.server || ""}` +
+        `${job.result.currency ? ` · tiền tệ ${job.result.currency}` : ""}.`;
+    } catch (error) {
+      connectionStatus.textContent = `Kiểm tra thất bại: ${error.message}`;
+    } finally {
+      connectionCheckButton.disabled = false;
+    }
+  });
+
+  loadSystemStatus();
+  loadSystemStatus();
 
   function addLink(parent, href, text) {
     const link = document.createElement("a");
@@ -253,29 +354,17 @@
       }
 
       const jobId = result.job_id;
-      let job;
-      do {
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-        const jobResponse = await fetch(`/jobs/${encodeURIComponent(jobId)}`);
-        const jobData = await jobResponse.json();
-        if (!jobResponse.ok) {
-          throw new Error(jobData.detail || "Không thể đọc trạng thái job.");
-        }
-        job = jobData;
-        if (job.status === "queued") {
-          status.textContent = "Job đang chờ đến lượt chạy...";
-        } else if (job.status === "running") {
-          const progress = `${job.completed_trials}/${job.total_trials} lượt`;
-          const best = job.best_value === null ? "" : ` · Best score: ${job.best_value}`;
+      const job = await readJobUntilFinished(jobId, (current) => {
+        if (current.status === "queued") {
+          status.textContent =
+            `Job đang chờ: vị trí ${current.queue_position}/${current.queued_jobs}` +
+            ` · Hàng đợi tối đa ${current.maximum_queued_jobs} job.`;
+        } else if (current.status === "running") {
+          const progress = `${current.completed_trials}/${current.total_trials} lượt`;
+          const best = current.best_value === null ? "" : ` · Best score: ${current.best_value}`;
           status.textContent = `Đang chạy Strategy Tester: ${progress}${best}`;
         }
-      } while (job.status === "queued" || job.status === "running");
-
-      if (job.status !== "completed") {
-        throw new Error(
-          job.error || `Job kết thúc với trạng thái ${job.status}.`
-        );
-      }
+      });
 
       const completed = job.result;
       status.replaceChildren();

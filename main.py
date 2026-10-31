@@ -1,9 +1,13 @@
 import base64
 import binascii
 import hmac
+import importlib.util
 import os
 import shutil
+import threading
+import time
 import uuid
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 
@@ -12,8 +16,13 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 
-from app.services.ai_engine.job_manager import JobStore, OptimizationJobManager
+from app.services.ai_engine.job_manager import (
+    JobQueueFullError,
+    JobStore,
+    OptimizationJobManager,
+)
 from app.services.ai_engine.optimizer import AIOptimizer
+from app.services.mt5_engine.runner import MT5BacktestRunner
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -21,13 +30,49 @@ WORKSPACE_DIR = PROJECT_ROOT / "workspace"
 JOBS_DIR = WORKSPACE_DIR / "jobs"
 JOB_DATABASE_PATH = WORKSPACE_DIR / "jobs.sqlite3"
 MAX_SET_FILE_SIZE = 10 * 1024 * 1024
+MAX_QUEUED_JOBS = 5
+MAX_TRIALS_PER_JOB = 100
+MAX_OPTIMIZATIONS_PER_MINUTE_PER_IP = 3
+OPTIMIZATION_RATE_WINDOW_SECONDS = 60
+
+
+class OptimizationRateLimiter:
+    def __init__(self, limit: int, window_seconds: int):
+        self.limit = limit
+        self.window_seconds = window_seconds
+        self._requests: dict[str, deque[float]] = {}
+        self._lock = threading.Lock()
+
+    def acquire(self, client_ip: str) -> int | None:
+        now = time.monotonic()
+        cutoff = now - self.window_seconds
+        with self._lock:
+            expired_keys = []
+            for key, timestamps in self._requests.items():
+                while timestamps and timestamps[0] <= cutoff:
+                    timestamps.popleft()
+                if not timestamps:
+                    expired_keys.append(key)
+            for key in expired_keys:
+                del self._requests[key]
+
+            timestamps = self._requests.setdefault(client_ip, deque())
+            if len(timestamps) >= self.limit:
+                return max(1, int(timestamps[0] + self.window_seconds - now + 0.999))
+            timestamps.append(now)
+            return None
 
 load_dotenv(PROJECT_ROOT / ".env")
 app = FastAPI(title="MT5 AI Optimizer API")
+optimization_rate_limiter = OptimizationRateLimiter(
+    MAX_OPTIMIZATIONS_PER_MINUTE_PER_IP,
+    OPTIMIZATION_RATE_WINDOW_SECONDS,
+)
 job_manager = OptimizationJobManager(
     JobStore(JOB_DATABASE_PATH),
     JOBS_DIR,
-    lambda config, progress: _execute_optimization_job(config, progress),
+    lambda config, progress: _execute_job(config, progress),
+    maximum_queued_jobs=MAX_QUEUED_JOBS,
 )
 
 
@@ -130,6 +175,26 @@ def _validate_expert_file(terminal_path: Path, expert_name: str):
         )
 
 
+def _configured_account() -> dict[str, str]:
+    return {
+        key: os.getenv(environment_name, "")
+        for key, environment_name in (
+            ("login", "MT5_LOGIN"),
+            ("password", "MT5_PASSWORD"),
+            ("server", "MT5_SERVER"),
+        )
+    }
+
+
+def _execute_job(config: dict, progress_callback) -> dict:
+    if config.get("job_type") == "connection_check":
+        account = _configured_account()
+        return MT5BacktestRunner(config["terminal_path"]).check_connection(
+            account["login"], account["password"], account["server"]
+        )
+    return _execute_optimization_job(config, progress_callback)
+
+
 def _execute_optimization_job(config: dict, progress_callback) -> dict:
     required_account_vars = ("MT5_LOGIN", "MT5_PASSWORD", "MT5_SERVER")
     account_info = {name: os.getenv(name) for name in required_account_vars}
@@ -225,14 +290,101 @@ def optimizer_interface():
     return FileResponse(PROJECT_ROOT / "web" / "optimizer.html")
 
 
+@app.get("/system/status")
+def get_system_status():
+    terminal_path = _configured_path(
+        "MT5_TERMINAL_PATH", PROJECT_ROOT / "mt5_portable" / "terminal64.exe"
+    )
+    expert_name = os.getenv("MT5_EXPERT_NAME", "")
+    expert_exists = False
+    expert_status = "not_configured" if not expert_name else "not_checked"
+    if expert_name and terminal_path.suffix.lower() != ".lnk":
+        relative_expert_path = Path(expert_name.replace("/", os.sep))
+        if not relative_expert_path.is_absolute() and ".." not in relative_expert_path.parts:
+            expert_exists = (
+                terminal_path.parent / "MQL5" / "Experts" / relative_expert_path
+            ).is_file()
+        expert_status = "available" if expert_exists else "missing"
+
+    account = _configured_account()
+    account_configured = all(account.values())
+    return {
+        "application": {"status": "ready"},
+        "mt5_package": {
+            "status": (
+                "ready" if importlib.util.find_spec("MetaTrader5") else "missing"
+            )
+        },
+        "account": {
+            "status": "configured" if account_configured else "missing",
+            "server": account["server"] if account_configured else None,
+        },
+        "terminal": {
+            "status": "available" if terminal_path.is_file() else "missing",
+            "path": str(terminal_path),
+        },
+        "expert": {
+            "status": expert_status,
+            "name": expert_name or None,
+        },
+        "broker": {"status": "not_checked"},
+        "jobs": job_manager.queue_status(),
+    }
+
+
+@app.post("/connection-check", status_code=202)
+def submit_connection_check():
+    account = _configured_account()
+    missing_settings = [
+        key for key, value in account.items() if not value
+    ]
+    if missing_settings:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Missing MT5 account settings in .env: "
+                + ", ".join(f"MT5_{key.upper()}" for key in missing_settings)
+            ),
+        )
+
+    terminal_path = _configured_path(
+        "MT5_TERMINAL_PATH", PROJECT_ROOT / "mt5_portable" / "terminal64.exe"
+    )
+    if not terminal_path.is_file():
+        raise HTTPException(
+            status_code=503,
+            detail=f"MT5 terminal was not found at {terminal_path}.",
+        )
+
+    job_id = uuid.uuid4().hex
+    try:
+        job_manager.submit(
+            job_id,
+            {
+                "job_id": job_id,
+                "job_type": "connection_check",
+                "terminal_path": str(terminal_path),
+            },
+            1,
+        )
+    except JobQueueFullError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    return {
+        "job_id": job_id,
+        "status": "queued",
+        "status_url": f"/jobs/{job_id}",
+    }
+
+
 @app.post("/optimize", status_code=202)
 def optimize_uploaded_set(
+    request: Request,
     file: UploadFile = File(...),
     optimization_file: UploadFile | None = File(None),
     expert_name: str = Form(os.getenv("MT5_EXPERT_NAME", "")),
     symbol: str = Form("EURUSD"),
     period: str = Form("H1"),
-    n_trials: int = Form(10, ge=1, le=1000),
+    n_trials: int = Form(10, ge=1, le=MAX_TRIALS_PER_JOB),
     from_date: str = Form("2023.01.01"),
     to_date: str = Form("2023.12.31"),
     deposit: float = Form(10000, gt=0),
@@ -307,6 +459,18 @@ def optimize_uploaded_set(
         )
     _validate_expert_file(terminal_path, expert_name)
 
+    client_ip = request.client.host if request.client else "unknown"
+    retry_after = optimization_rate_limiter.acquire(client_ip)
+    if retry_after is not None:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                "Too many optimization requests from this IP. "
+                f"Try again in {retry_after} seconds."
+            ),
+            headers={"Retry-After": str(retry_after)},
+        )
+
     job_id = uuid.uuid4().hex
     job_directory = JOBS_DIR / job_id
     set_file_path = job_directory / "parameters.set"
@@ -353,6 +517,9 @@ def optimize_uploaded_set(
     except (FileNotFoundError, ValueError) as exc:
         shutil.rmtree(job_directory, ignore_errors=True)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except JobQueueFullError as exc:
+        shutil.rmtree(job_directory, ignore_errors=True)
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
     except Exception:
         shutil.rmtree(job_directory, ignore_errors=True)
         raise
@@ -377,6 +544,7 @@ def get_optimization_job(job_id: str):
         "completed_trials": job["completed_trials"],
         "total_trials": job["total_trials"],
         "best_value": job["best_value"],
+        **job_manager.queue_status(job_id),
         "error": job["error"],
         "result": job["result"],
     }

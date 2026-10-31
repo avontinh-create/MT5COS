@@ -46,11 +46,25 @@ Open `https://your-domain.example/ui` and authenticate with
 the UI, API, downloads, and API documentation. HTTPS is required because
 browser Basic authentication sends credentials with each request.
 
+The UI's MT5 status panel checks server-side configuration, the MetaTrader5
+Python package, terminal executable, and configured EA. Use **Kiểm tra kết nối
+broker** to verify the configured account through MT5. This check is queued
+behind optimization jobs, briefly starts a terminal session, and closes it
+afterward; close the portable terminal first. It does not place trades, and the
+account password is never returned to the browser or stored in the job record.
+
 Optimization requests are persisted as jobs in `workspace/jobs.sqlite3` and
 processed one at a time by a background worker. The browser polls `/jobs/{id}`
-for queued/running/completed/failed status and trial progress. A running job
-is marked failed after an application restart; queued jobs are resumed. Uploaded
-input files are removed when a job finishes.
+for queued/running/completed/failed status, queue position, and trial progress.
+The system status panel refreshes the total queue count every 15 seconds. A
+running job is marked failed after an application restart; queued jobs are
+resumed. Uploaded input files are removed when a job finishes.
+
+To protect a single VPS, each job is capped at 100 trials, at most five jobs
+may wait in the queue, and each client IP may submit at most three optimization
+requests per minute. Requests exceeding a limit receive HTTP 429; queued jobs
+and trial limits apply to all authenticated users. Behind Caddy, rate limiting
+uses the client IP forwarded by the trusted local reverse proxy.
 
 The current implementation is intended for a single operator and a single
 portable MT5 terminal. Run exactly one API worker; multiple Uvicorn workers

@@ -218,6 +218,82 @@ class MT5BacktestRunner:
                 for process_id in started_processes:
                     self._close_terminal_process(process_id)
 
+    def check_connection(self, login: str, password: str, server: str) -> dict:
+        if not login.isdigit():
+            raise ValueError("MT5 login must contain only digits.")
+        if not password or not server:
+            raise ValueError("MT5 password and server are required.")
+
+        if self.terminal_path.lower().endswith(".lnk"):
+            terminal_path, _, _ = self._resolve_shortcut()
+        else:
+            terminal_path = os.path.abspath(self.terminal_path)
+        if not os.path.isfile(terminal_path):
+            raise FileNotFoundError(f"MetaTrader executable not found: {terminal_path}")
+
+        existing_processes = self._terminal_process_ids(terminal_path)
+        if existing_processes:
+            raise RuntimeError(
+                "Close the portable MT5 terminal before checking the broker connection."
+            )
+
+        try:
+            import MetaTrader5 as mt5
+        except ImportError as exc:
+            raise RuntimeError(
+                "Install the MetaTrader5 Python package to check the broker connection."
+            ) from exc
+
+        initialized = False
+        try:
+            with self._terminal_lock:
+                initialized = mt5.initialize(
+                    path=terminal_path,
+                    login=int(login),
+                    password=password,
+                    server=server,
+                    portable=True,
+                )
+                if not initialized:
+                    raise RuntimeError(
+                        "Could not connect to the MT5 broker: "
+                        f"{mt5.last_error()}"
+                    )
+
+                account = mt5.account_info()
+                if account is None:
+                    raise RuntimeError(
+                        "MT5 connected but account information is unavailable: "
+                        f"{mt5.last_error()}"
+                    )
+                if int(account.login) != int(login):
+                    raise RuntimeError(
+                        "MT5 connected to a different account than configured."
+                    )
+
+                terminal = mt5.terminal_info()
+                if terminal is None or not getattr(terminal, "connected", False):
+                    raise RuntimeError(
+                        "MT5 initialized, but the terminal is not connected to the broker."
+                    )
+
+                return {
+                    "connected": True,
+                    "server": getattr(account, "server", server),
+                    "currency": getattr(account, "currency", None),
+                    "terminal_build": getattr(terminal, "build", None),
+                }
+        finally:
+            try:
+                if initialized:
+                    mt5.shutdown()
+            finally:
+                started_processes = (
+                    self._terminal_process_ids(terminal_path) - existing_processes
+                )
+                for process_id in started_processes:
+                    self._close_terminal_process(process_id)
+
     @staticmethod
     def _read_account_login(ini_path: str) -> str:
         config = configparser.ConfigParser(interpolation=None)

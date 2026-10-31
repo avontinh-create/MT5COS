@@ -4,10 +4,53 @@ import time
 import unittest
 from pathlib import Path
 
-from app.services.ai_engine.job_manager import JobStore, OptimizationJobManager
+from app.services.ai_engine.job_manager import (
+    JobQueueFullError,
+    JobStore,
+    OptimizationJobManager,
+)
 
 
 class OptimizationJobManagerTests(unittest.TestCase):
+    def test_rejects_jobs_when_queue_is_full(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manager = OptimizationJobManager(
+                JobStore(root / "jobs.sqlite3"),
+                root / "jobs",
+                lambda *_: {},
+                maximum_queued_jobs=1,
+            )
+            manager.submit("first", {"job_id": "first"}, 1)
+
+            with self.assertRaises(JobQueueFullError):
+                manager.submit("second", {"job_id": "second"}, 1)
+
+            self.assertEqual(manager.store.queued_count(), 1)
+
+    def test_reports_queue_position_and_running_job_count(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = JobStore(root / "jobs.sqlite3")
+            store.create("first", {"job_id": "first"}, 1)
+            store.create("second", {"job_id": "second"}, 1)
+            store.create("active", {"job_id": "active"}, 1)
+            store.update("active", status="running")
+            manager = OptimizationJobManager(
+                store, root / "jobs", lambda *_: {}, maximum_queued_jobs=5
+            )
+
+            self.assertEqual(
+                manager.queue_status("second"),
+                {
+                    "queued_jobs": 2,
+                    "running_jobs": 1,
+                    "maximum_queued_jobs": 5,
+                    "queue_position": 2,
+                },
+            )
+            self.assertIsNone(manager.queue_status("active")["queue_position"])
+
     def test_runs_job_and_persists_progress_and_result(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
