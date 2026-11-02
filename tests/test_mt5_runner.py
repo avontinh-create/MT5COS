@@ -115,6 +115,26 @@ class MT5BacktestRunnerTests(unittest.TestCase):
             self.assertIn("ExecutionMode=1", content)
             self.assertNotIn("TestExpertParameters=", content)
 
+    def test_builder_rejects_random_delay_with_open_prices_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            builder = MT5ConfigBuilder(str(root / "workspace"))
+
+            with self.assertRaisesRegex(ValueError, "Random Delay.*Open prices only"):
+                builder.build_ini_file(
+                    trial_id="invalid-delay",
+                    expert_name="Peak.ex5",
+                    symbol="EURUSD",
+                    period="H1",
+                    set_file_path=str(root / "trial.set"),
+                    report_path=str(root / "report.htm"),
+                    login="1234",
+                    password="secret",
+                    server="Broker-Demo",
+                    model=2,
+                    execution_mode=1,
+                )
+
     def test_copies_tester_report_to_workspace_report_path(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

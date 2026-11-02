@@ -324,7 +324,13 @@ class AIOptimizer:
                 "Tester model must be 0, 1, 2, or 4 for financial testing."
             )
         if execution_mode not in {0, 1}:
-            raise ValueError("Execution mode must be 0 (no delay) or 1 (random).")
+            raise ValueError(
+                "Execution mode must be 0 (No Delay) or 1 (Random Delay)."
+            )
+        if execution_mode == 1 and model == 2:
+            raise ValueError(
+                "MQL5 Random Delay cannot be used with Open prices only."
+            )
 
         run_id = uuid.uuid4().hex
         study = optuna.create_study(

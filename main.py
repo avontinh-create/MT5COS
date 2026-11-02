@@ -1,9 +1,14 @@
 import base64
 import binascii
 import hmac
+import ipaddress
 import importlib.util
+import logging
 import os
+import re
+import secrets
 import shutil
+import smtplib
 import threading
 import time
 import uuid
@@ -14,6 +19,7 @@ from pathlib import Path
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from pydantic import BaseModel, Field
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 from app.services.ai_engine.job_manager import (
@@ -22,6 +28,12 @@ from app.services.ai_engine.job_manager import (
     OptimizationJobManager,
 )
 from app.services.ai_engine.optimizer import AIOptimizer
+from app.services.auth_store import (
+    AuthStore,
+    has_valid_credential_encryption_key,
+    send_verification_email,
+)
+from app.services.database import Database
 from app.services.mt5_engine.runner import MT5BacktestRunner
 
 
@@ -34,6 +46,9 @@ MAX_QUEUED_JOBS = 5
 MAX_TRIALS_PER_JOB = 100
 MAX_OPTIMIZATIONS_PER_MINUTE_PER_IP = 3
 OPTIMIZATION_RATE_WINDOW_SECONDS = 60
+LEGACY_USER_ID = "__legacy__"
+SESSION_COOKIE_NAME = "mt5_session"
+logger = logging.getLogger(__name__)
 
 
 class OptimizationRateLimiter:
@@ -68,8 +83,12 @@ optimization_rate_limiter = OptimizationRateLimiter(
     MAX_OPTIMIZATIONS_PER_MINUTE_PER_IP,
     OPTIMIZATION_RATE_WINDOW_SECONDS,
 )
+auth_rate_limiter = OptimizationRateLimiter(10, 15 * 60)
+signup_rate_limiter = OptimizationRateLimiter(5, 60 * 60)
+database = Database(os.getenv("DATABASE_URL", str(JOB_DATABASE_PATH)))
+auth_store = AuthStore(database)
 job_manager = OptimizationJobManager(
-    JobStore(JOB_DATABASE_PATH),
+    JobStore(database),
     JOBS_DIR,
     lambda config, progress: _execute_job(config, progress),
     maximum_queued_jobs=MAX_QUEUED_JOBS,
@@ -88,6 +107,35 @@ def stop_optimization_jobs():
 
 @app.middleware("http")
 async def require_web_auth(request: Request, call_next):
+    if request.url.path in {
+        "/",
+        "/ui",
+        "/auth/config",
+        "/auth/register",
+        "/auth/verify",
+        "/auth/login",
+    }:
+        return await call_next(request)
+
+    session_token = request.cookies.get(SESSION_COOKIE_NAME)
+    if session_token:
+        user = auth_store.get_session_user(session_token)
+        if user is not None:
+            request.state.user_id = user["user_id"]
+            request.state.user_email = user["email"]
+            return await call_next(request)
+
+    if _is_local_preview_request(request):
+        request.state.user_id = LEGACY_USER_ID
+        request.state.user_email = None
+        return await call_next(request)
+
+    if not _legacy_basic_auth_enabled():
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Sign in to access this resource."},
+        )
+
     username = os.getenv("MT5_WEB_USERNAME", "")
     password = os.getenv("MT5_WEB_PASSWORD", "")
     if (
@@ -122,12 +170,248 @@ async def require_web_auth(request: Request, call_next):
         or not hmac.compare_digest(supplied_username, username)
         or not hmac.compare_digest(supplied_password, password)
     ):
-        return Response(
+        return JSONResponse(
             status_code=401,
-            headers={"WWW-Authenticate": 'Basic realm="MT5 AI Optimizer"'},
+            content={"detail": "Sign in to access this resource."},
         )
 
+    request.state.user_id = LEGACY_USER_ID
+    request.state.user_email = None
     return await call_next(request)
+
+
+class LoginPayload(BaseModel):
+    email: str = Field(max_length=320)
+    password: str = Field(min_length=1, max_length=1024)
+
+
+class RegisterPayload(BaseModel):
+    email: str = Field(max_length=320)
+    password: str = Field(min_length=12, max_length=1024)
+
+
+class VerifyPayload(BaseModel):
+    token: str = Field(min_length=32, max_length=256)
+
+
+class MT5CredentialPayload(BaseModel):
+    login: str = Field(min_length=1, max_length=32)
+    password: str = Field(min_length=1, max_length=256)
+    server: str = Field(min_length=1, max_length=128)
+
+
+def _environment_flag(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _legacy_basic_auth_enabled() -> bool:
+    return os.getenv("MT5_LEGACY_BASIC_AUTH_ENABLED", "1").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _signup_disabled_reason() -> str | None:
+    if not _environment_flag("MT5_PUBLIC_SIGNUP_ENABLED"):
+        return "Public registration is disabled by the server."
+    if _legacy_basic_auth_enabled():
+        return "Disable legacy shared Basic authentication before public registration."
+    database_url = os.getenv("DATABASE_URL", "")
+    if not database_url.startswith(("postgresql://", "postgresql+psycopg://")):
+        return "Public registration requires a PostgreSQL DATABASE_URL."
+    if not _environment_flag("MT5_EMAIL_VERIFICATION_ENABLED"):
+        return "Email verification must be enabled before public registration."
+    if not _environment_flag("MT5_ACCOUNT_RECOVERY_READY"):
+        return "Account recovery support must be ready before public registration."
+    if not os.getenv("MT5_SMTP_HOST") or not os.getenv("MT5_SMTP_FROM"):
+        return "SMTP host and sender must be configured for email verification."
+    smtp_username = os.getenv("MT5_SMTP_USERNAME", "")
+    smtp_password = os.getenv("MT5_SMTP_PASSWORD", "")
+    if bool(smtp_username) != bool(smtp_password):
+        return "Configure both SMTP username and password, or neither."
+    if not os.getenv("MT5_PUBLIC_BASE_URL", "").startswith("https://"):
+        return "Public registration requires an HTTPS MT5_PUBLIC_BASE_URL."
+    if not _environment_flag("MT5_COOKIE_SECURE"):
+        return "Secure session cookies must be enabled for public registration."
+    if not has_valid_credential_encryption_key():
+        return "A valid MT5 credential encryption key is required."
+    return None
+
+
+def _request_user_id(request: Request) -> str:
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Sign in to continue.")
+    return user_id
+
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+@app.get("/auth/config")
+def get_auth_config():
+    return {
+        "registration_enabled": _signup_disabled_reason() is None,
+        "registration_message": _signup_disabled_reason(),
+    }
+
+
+@app.post("/auth/register", status_code=202)
+def register_account(payload: RegisterPayload, request: Request):
+    disabled_reason = _signup_disabled_reason()
+    if disabled_reason is not None:
+        raise HTTPException(status_code=503, detail=disabled_reason)
+    retry_after = signup_rate_limiter.acquire(_client_ip(request))
+    if retry_after is not None:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many registration attempts. Try again in {retry_after} seconds.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    email = payload.email.strip().lower()
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise HTTPException(status_code=422, detail="Enter a valid email address.")
+    if len(payload.password.encode("utf-8")) > 1024:
+        raise HTTPException(status_code=422, detail="Password is too long.")
+
+    verification_token = secrets.token_urlsafe(32)
+    user_id = auth_store.create_user(email, payload.password, verification_token)
+    if user_id is not None:
+        try:
+            send_verification_email(email, verification_token)
+        except (OSError, smtplib.SMTPException, RuntimeError, ValueError) as exc:
+            auth_store.delete_unverified_user(user_id)
+            logger.exception("Could not send account verification email")
+            raise HTTPException(
+                status_code=503,
+                detail="Verification email could not be sent. Please try again later.",
+            ) from exc
+    return {
+        "message": (
+            "If this email can be registered, a verification link will be sent."
+        )
+    }
+
+
+@app.post("/auth/verify")
+def verify_account(payload: VerifyPayload):
+    if not auth_store.verify_email(payload.token):
+        raise HTTPException(
+            status_code=400,
+            detail="Verification link is invalid or has expired.",
+        )
+    return {"message": "Email verified. You can now sign in."}
+
+
+@app.post("/auth/login")
+def login_account(payload: LoginPayload, response: Response, request: Request):
+    retry_after = auth_rate_limiter.acquire(_client_ip(request))
+    if retry_after is not None:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many sign-in attempts. Try again in {retry_after} seconds.",
+            headers={"Retry-After": str(retry_after)},
+        )
+    user = auth_store.authenticate(payload.email.strip().lower(), payload.password)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+    if not user["email_verified"]:
+        raise HTTPException(status_code=403, detail="Verify your email before signing in.")
+
+    token, expires_at = auth_store.create_session(user["user_id"])
+    response.set_cookie(
+        SESSION_COOKIE_NAME,
+        token,
+        max_age=int((expires_at - datetime.now(expires_at.tzinfo)).total_seconds()),
+        httponly=True,
+        secure=_environment_flag("MT5_COOKIE_SECURE"),
+        samesite="strict",
+        path="/",
+    )
+    return {"user_id": user["user_id"], "email": user["email"]}
+
+
+@app.get("/auth/me")
+def current_account(request: Request):
+    user_id = _request_user_id(request)
+    if user_id == LEGACY_USER_ID:
+        return {"user_id": user_id, "email": None, "legacy_auth": True}
+    return {
+        "user_id": user_id,
+        "email": getattr(request.state, "user_email", None),
+        "legacy_auth": False,
+    }
+
+
+@app.post("/auth/logout")
+def logout_account(request: Request, response: Response):
+    token = request.cookies.get(SESSION_COOKIE_NAME)
+    if token:
+        auth_store.delete_session(token)
+    response.delete_cookie(
+        SESSION_COOKIE_NAME,
+        httponly=True,
+        secure=_environment_flag("MT5_COOKIE_SECURE"),
+        samesite="strict",
+        path="/",
+    )
+    return {"message": "Signed out."}
+
+
+@app.put("/account/mt5")
+def save_mt5_credentials(payload: MT5CredentialPayload, request: Request):
+    user_id = _request_user_id(request)
+    if user_id == LEGACY_USER_ID:
+        raise HTTPException(
+            status_code=409,
+            detail="Sign in with a verified user account to save MT5 credentials.",
+        )
+    if not has_valid_credential_encryption_key():
+        raise HTTPException(
+            status_code=503,
+            detail="MT5 credential encryption is not configured on this server.",
+        )
+    if not payload.login.isascii() or not payload.login.isdigit():
+        raise HTTPException(status_code=422, detail="MT5 login must contain digits only.")
+    if not payload.server.strip():
+        raise HTTPException(status_code=422, detail="MT5 server is required.")
+    auth_store.save_credentials(
+        user_id,
+        payload.login,
+        payload.password,
+        payload.server.strip(),
+    )
+    return {"saved": True}
+
+
+def _is_loopback_host(host: str) -> bool:
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _is_local_preview_request(request: Request) -> bool:
+    if os.getenv("MT5_ALLOW_LOCAL_NO_AUTH", "").strip().lower() not in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return False
+    client_host = request.client.host if request.client else ""
+    requested_host = request.url.hostname or ""
+    return (
+        _is_loopback_host(client_host)
+        and (
+            requested_host.lower() == "localhost"
+            or _is_loopback_host(requested_host)
+        )
+    )
 
 
 def _configured_path(variable: str, default: Path) -> Path:
@@ -186,27 +470,38 @@ def _configured_account() -> dict[str, str]:
     }
 
 
-def _execute_job(config: dict, progress_callback) -> dict:
-    if config.get("job_type") == "connection_check":
+def _account_for_job(user_id: str | None) -> dict[str, str]:
+    if user_id == LEGACY_USER_ID or user_id is None:
         account = _configured_account()
+    else:
+        account = auth_store.get_credentials(user_id) or {}
+    if not all(account.get(key) for key in ("login", "password", "server")):
+        raise RuntimeError(
+            "MT5 credentials are not configured for the account that owns this job."
+        )
+    return account
+
+
+def _user_workspace(user_id: str | None) -> Path:
+    if user_id in {None, LEGACY_USER_ID}:
+        return WORKSPACE_DIR
+    if not re.fullmatch(r"[a-f0-9]{32}", user_id):
+        raise ValueError("Invalid user workspace identifier.")
+    return WORKSPACE_DIR / "users" / user_id
+
+
+def _execute_job(config: dict, progress_callback) -> dict:
+    account = _account_for_job(config.get("user_id"))
+    if config.get("job_type") == "connection_check":
         return MT5BacktestRunner(config["terminal_path"]).check_connection(
             account["login"], account["password"], account["server"]
         )
-    return _execute_optimization_job(config, progress_callback)
+    return _execute_optimization_job(config, progress_callback, account)
 
 
-def _execute_optimization_job(config: dict, progress_callback) -> dict:
-    required_account_vars = ("MT5_LOGIN", "MT5_PASSWORD", "MT5_SERVER")
-    account_info = {name: os.getenv(name) for name in required_account_vars}
-    missing_account_vars = [
-        name for name, value in account_info.items() if not value
-    ]
-    if missing_account_vars:
-        raise RuntimeError(
-            "Missing MT5 account settings in .env: "
-            + ", ".join(missing_account_vars)
-        )
-
+def _execute_optimization_job(
+    config: dict, progress_callback, account: dict[str, str]
+) -> dict:
     terminal_path = _configured_path(
         "MT5_TERMINAL_PATH", PROJECT_ROOT / "mt5_portable" / "terminal64.exe"
     )
@@ -221,22 +516,23 @@ def _execute_optimization_job(config: dict, progress_callback) -> dict:
         if config["has_optimization_file"]
         else None
     )
+    account_workspace = _user_workspace(config.get("user_id"))
     optimizer = AIOptimizer(
         terminal_path=str(terminal_path),
-        base_workspace=str(WORKSPACE_DIR),
+        base_workspace=str(account_workspace),
         account_info={
-            "login": account_info["MT5_LOGIN"],
-            "password": account_info["MT5_PASSWORD"],
-            "server": account_info["MT5_SERVER"],
+            "login": account["login"],
+            "password": account["password"],
+            "server": account["server"],
         },
     )
     parsed_set = optimizer.builder.parse_set_file(str(set_file_path))
     available_symbols = None
     if parsed_set.get("CurrencyList") is not None:
         available_symbols = optimizer.runner.get_available_symbols(
-            account_info["MT5_LOGIN"],
-            account_info["MT5_PASSWORD"],
-            account_info["MT5_SERVER"],
+            account["login"],
+            account["password"],
+            account["server"],
         )
     optimizer.setup_task(
         str(set_file_path),
@@ -291,7 +587,8 @@ def optimizer_interface():
 
 
 @app.get("/system/status")
-def get_system_status():
+def get_system_status(request: Request):
+    user_id = _request_user_id(request)
     terminal_path = _configured_path(
         "MT5_TERMINAL_PATH", PROJECT_ROOT / "mt5_portable" / "terminal64.exe"
     )
@@ -306,8 +603,43 @@ def get_system_status():
             ).is_file()
         expert_status = "available" if expert_exists else "missing"
 
-    account = _configured_account()
-    account_configured = all(account.values())
+    if user_id == LEGACY_USER_ID:
+        account = _configured_account()
+        account_configured = all(account.values())
+        account_server = account["server"] if account_configured else None
+        account_status = "configured" if account_configured else "missing"
+    else:
+        saved_credentials = auth_store.has_credentials(user_id)
+        key_available = has_valid_credential_encryption_key()
+        account_server = (
+            auth_store.credential_server(user_id) if saved_credentials else None
+        )
+        account_configured = saved_credentials and key_available
+        account_status = (
+            "configured"
+            if account_configured
+            else (
+                "encryption_key_missing"
+                if saved_credentials
+                else "missing"
+            )
+        )
+    latest_job = job_manager.latest(user_id)
+    latest_job_status = None
+    if latest_job is not None:
+        latest_job_status = {
+            "job_id": latest_job["job_id"],
+            "status": latest_job["status"],
+            "updated_at": latest_job["updated_at"],
+            "completed_trials": latest_job["completed_trials"],
+            "total_trials": latest_job["total_trials"],
+            "error": latest_job["error"],
+            "terminal_build": (
+                latest_job["result"].get("terminal_build")
+                if latest_job["result"]
+                else None
+            ),
+        }
     return {
         "application": {"status": "ready"},
         "mt5_package": {
@@ -316,8 +648,8 @@ def get_system_status():
             )
         },
         "account": {
-            "status": "configured" if account_configured else "missing",
-            "server": account["server"] if account_configured else None,
+            "status": account_status,
+            "server": account_server if account_configured else None,
         },
         "terminal": {
             "status": "available" if terminal_path.is_file() else "missing",
@@ -329,21 +661,33 @@ def get_system_status():
         },
         "broker": {"status": "not_checked"},
         "jobs": job_manager.queue_status(),
+        "latest_job": latest_job_status,
     }
 
 
 @app.post("/connection-check", status_code=202)
-def submit_connection_check():
-    account = _configured_account()
-    missing_settings = [
-        key for key, value in account.items() if not value
-    ]
+def submit_connection_check(request: Request):
+    user_id = _request_user_id(request)
+    if user_id == LEGACY_USER_ID:
+        account = _configured_account()
+        missing_settings = [
+            key for key, value in account.items() if not value
+        ]
+    else:
+        if (
+            auth_store.has_credentials(user_id)
+            and not has_valid_credential_encryption_key()
+        ):
+            raise HTTPException(
+                status_code=503,
+                detail="MT5 credential encryption is not configured on this server.",
+            )
+        missing_settings = [] if auth_store.has_credentials(user_id) else ["account"]
     if missing_settings:
         raise HTTPException(
-            status_code=503,
+            status_code=409,
             detail=(
-                "Missing MT5 account settings in .env: "
-                + ", ".join(f"MT5_{key.upper()}" for key in missing_settings)
+                "Save valid MT5 account credentials before checking the connection."
             ),
         )
 
@@ -364,8 +708,10 @@ def submit_connection_check():
                 "job_id": job_id,
                 "job_type": "connection_check",
                 "terminal_path": str(terminal_path),
+                "user_id": user_id,
             },
             1,
+            user_id,
         )
     except JobQueueFullError as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
@@ -393,6 +739,7 @@ def optimize_uploaded_set(
     model: int = Form(1, ge=0, le=4),
     execution_mode: int = Form(0, ge=0, le=1),
 ):
+    user_id = _request_user_id(request)
     if not file.filename or Path(file.filename).suffix.lower() != ".set":
         raise HTTPException(status_code=400, detail="Upload a .set parameter file.")
 
@@ -435,18 +782,28 @@ def optimize_uploaded_set(
             detail="Select a financial tick model (Every tick, 1 minute OHLC, "
             "Open prices, or Real ticks).",
         )
-    required_account_vars = ("MT5_LOGIN", "MT5_PASSWORD", "MT5_SERVER")
-    account_info = {name: os.getenv(name) for name in required_account_vars}
-    missing_account_vars = [
-        name for name, value in account_info.items() if not value
-    ]
-    if missing_account_vars:
+    if execution_mode == 1 and model == 2:
         raise HTTPException(
-            status_code=503,
+            status_code=422,
             detail=(
-                "Missing MT5 account settings in .env: "
-                + ", ".join(missing_account_vars)
+                "MQL5 Random Delay cannot be used with Open prices only. "
+                "Choose No Delay or another tick model."
             ),
+        )
+    if user_id == LEGACY_USER_ID:
+        account_info = _configured_account()
+        account_configured = all(account_info.values())
+    else:
+        account_configured = auth_store.has_credentials(user_id)
+        if account_configured and not has_valid_credential_encryption_key():
+            raise HTTPException(
+                status_code=503,
+                detail="MT5 credential encryption is not configured on this server.",
+            )
+    if not account_configured:
+        raise HTTPException(
+            status_code=409,
+            detail="Save valid MT5 account credentials before submitting an optimization.",
         )
 
     terminal_path = _configured_path(
@@ -486,20 +843,41 @@ def optimize_uploaded_set(
         if optimization_set_file_path is not None:
             optimization_set_file_path.write_bytes(optimization_content)
 
-        validation_builder = AIOptimizer(
+        validation_optimizer = AIOptimizer(
             terminal_path=str(terminal_path),
-            base_workspace=str(WORKSPACE_DIR),
+            base_workspace=str(_user_workspace(user_id)),
             account_info={
                 "login": "",
                 "password": "",
                 "server": "",
             },
-        ).builder
-        validation_builder.parse_set_file(str(set_file_path))
-        if optimization_set_file_path is not None:
-            validation_builder.parse_set_file(str(optimization_set_file_path))
+        )
+        try:
+            validation_optimizer.setup_task(
+                str(set_file_path),
+                expert_name,
+                optimization_set_file_path=(
+                    str(optimization_set_file_path)
+                    if optimization_set_file_path is not None
+                    else None
+                ),
+            )
+        except ValueError as exc:
+            if "no parameters enabled for optimization" in str(exc):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "File tham số EA chưa bật tham số nào để tối ưu. "
+                        "Hãy tải file optimization_ranges.set (hoặc file phạm vi "
+                        ".set tương ứng) vào ô "
+                        "'File phạm vi tối ưu', hoặc bật ít nhất một tham số "
+                        "số bằng cờ Y trong file .set."
+                    ),
+                ) from exc
+            raise
         config = {
             "job_id": job_id,
+            "user_id": user_id,
             "has_optimization_file": has_optimization_file,
             "expert_name": expert_name,
             "symbol": symbol,
@@ -513,7 +891,7 @@ def optimize_uploaded_set(
             "model": model,
             "execution_mode": execution_mode,
         }
-        job_manager.submit(job_id, config, n_trials)
+        job_manager.submit(job_id, config, n_trials, user_id)
     except (FileNotFoundError, ValueError) as exc:
         shutil.rmtree(job_directory, ignore_errors=True)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -532,8 +910,9 @@ def optimize_uploaded_set(
 
 
 @app.get("/jobs/{job_id}")
-def get_optimization_job(job_id: str):
-    job = job_manager.get(job_id)
+def get_optimization_job(job_id: str, request: Request):
+    user_id = _request_user_id(request)
+    job = job_manager.get(job_id, user_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Optimization job not found.")
     return {
@@ -551,7 +930,8 @@ def get_optimization_job(job_id: str):
 
 
 @app.get("/results/{filename}")
-def download_best_set_file(filename: str):
+def download_best_set_file(filename: str, request: Request):
+    user_id = _request_user_id(request)
     if (
         Path(filename).name != filename
         or not filename.startswith("trial_")
@@ -559,14 +939,17 @@ def download_best_set_file(filename: str):
     ):
         raise HTTPException(status_code=404, detail="Result file not found.")
 
-    result_path = WORKSPACE_DIR / "temp_configs" / filename
+    if not job_manager.store.owns_result_file(user_id, filename):
+        raise HTTPException(status_code=404, detail="Result file not found.")
+    result_path = _user_workspace(user_id) / "temp_configs" / filename
     if not result_path.is_file():
         raise HTTPException(status_code=404, detail="Result file not found.")
     return FileResponse(result_path, filename=filename, media_type="application/octet-stream")
 
 
 @app.get("/reports/{filename}")
-def download_excel_report(filename: str):
+def download_excel_report(filename: str, request: Request):
+    user_id = _request_user_id(request)
     if (
         Path(filename).name != filename
         or not filename.startswith("report_trial_")
@@ -574,7 +957,9 @@ def download_excel_report(filename: str):
     ):
         raise HTTPException(status_code=404, detail="Excel report not found.")
 
-    report_path = WORKSPACE_DIR / "reports" / filename
+    if not job_manager.store.owns_result_file(user_id, filename, is_report=True):
+        raise HTTPException(status_code=404, detail="Excel report not found.")
+    report_path = _user_workspace(user_id) / "reports" / filename
     if not report_path.is_file():
         raise HTTPException(status_code=404, detail="Excel report not found.")
     return FileResponse(

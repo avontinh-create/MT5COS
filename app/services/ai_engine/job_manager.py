@@ -2,12 +2,14 @@ import json
 import logging
 import queue
 import shutil
-import sqlite3
 import threading
-from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
+
+from sqlalchemy import text
+
+from app.services.database import Database
 
 
 logger = logging.getLogger(__name__)
@@ -21,69 +23,100 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _decode_job_row(row) -> dict | None:
+    if row is None:
+        return None
+    record = dict(row)
+    record["config"] = json.loads(record.pop("config_json"))
+    raw_result = record.pop("result_json")
+    record["result"] = json.loads(raw_result) if raw_result else None
+    return record
+
+
 class JobStore:
-    def __init__(self, database_path: str | Path):
-        self.database_path = Path(database_path)
-        self.database_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connection() as connection:
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS optimization_jobs (
-                    job_id TEXT PRIMARY KEY,
-                    status TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    completed_trials INTEGER NOT NULL DEFAULT 0,
-                    total_trials INTEGER NOT NULL,
-                    best_value REAL,
-                    error TEXT,
-                    config_json TEXT NOT NULL,
-                    result_json TEXT
-                )
-                """
-            )
+    def __init__(self, database: Database | str | Path):
+        self.database = database if isinstance(database, Database) else Database(database)
+        self.engine = self.database.engine
 
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.database_path, timeout=30)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA busy_timeout = 30000")
-        return connection
-
-    @contextmanager
-    def _connection(self):
-        connection = self._connect()
-        try:
-            with connection:
-                yield connection
-        finally:
-            connection.close()
-
-    def create(self, job_id: str, config: dict, total_trials: int) -> None:
+    def create(
+        self,
+        job_id: str,
+        config: dict,
+        total_trials: int,
+        user_id: str | None = None,
+    ) -> None:
         now = _utc_now()
-        with self._connection() as connection:
+        with self.engine.begin() as connection:
             connection.execute(
-                """
-                INSERT INTO optimization_jobs
-                    (job_id, status, created_at, updated_at, total_trials, config_json)
-                VALUES (?, 'queued', ?, ?, ?, ?)
-                """,
-                (job_id, now, now, total_trials, json.dumps(config)),
+                text(
+                    """
+                    INSERT INTO optimization_jobs
+                        (job_id, user_id, status, created_at, updated_at,
+                         completed_trials, total_trials, config_json)
+                    VALUES
+                        (:job_id, :user_id, 'queued', :now, :now,
+                         0, :total_trials, :config_json)
+                    """
+                ),
+                {
+                    "job_id": job_id,
+                    "user_id": (
+                        user_id if user_id is not None else config.get("user_id")
+                    ),
+                    "now": now,
+                    "total_trials": total_trials,
+                    "config_json": json.dumps(config),
+                },
             )
 
-    def get(self, job_id: str) -> dict | None:
-        with self._connection() as connection:
+    def get(self, job_id: str, user_id: str | None = None) -> dict | None:
+        statement = "SELECT * FROM optimization_jobs WHERE job_id = :job_id"
+        parameters = {"job_id": job_id}
+        if user_id is not None:
+            statement += " AND user_id = :user_id"
+            parameters["user_id"] = user_id
+        with self.engine.connect() as connection:
             row = connection.execute(
-                "SELECT * FROM optimization_jobs WHERE job_id = ?",
-                (job_id,),
-            ).fetchone()
-        if row is None:
-            return None
+                text(statement), parameters
+            ).mappings().first()
+        return _decode_job_row(row)
 
-        record = dict(row)
-        record["config"] = json.loads(record.pop("config_json"))
-        raw_result = record.pop("result_json")
-        record["result"] = json.loads(raw_result) if raw_result else None
-        return record
+    def latest(self, user_id: str | None = None) -> dict | None:
+        statement = "SELECT * FROM optimization_jobs"
+        parameters = {}
+        if user_id is not None:
+            statement += " WHERE user_id = :user_id"
+            parameters["user_id"] = user_id
+        statement += " ORDER BY updated_at DESC, job_id DESC LIMIT 1"
+        with self.engine.connect() as connection:
+            row = connection.execute(
+                text(statement), parameters
+            ).mappings().first()
+        return _decode_job_row(row)
+
+    def owns_result_file(
+        self, user_id: str, filename: str, *, is_report: bool = False
+    ) -> bool:
+        with self.engine.connect() as connection:
+            results = connection.execute(
+                text(
+                    "SELECT result_json FROM optimization_jobs "
+                    "WHERE user_id = :user_id AND status = 'completed' "
+                    "AND result_json IS NOT NULL"
+                ),
+                {"user_id": user_id},
+            ).scalars()
+            for raw_result in results:
+                result = json.loads(raw_result)
+                if is_report:
+                    if any(
+                        report.get("filename") == filename
+                        for report in result.get("excel_reports", [])
+                    ):
+                        return True
+                elif result.get("best_set_file") == filename:
+                    return True
+        return False
 
     def update(
         self,
@@ -95,8 +128,8 @@ class JobStore:
         error: str | None = None,
         result: dict | None = None,
     ) -> None:
-        fields = ["updated_at = ?"]
-        values: list[object] = [_utc_now()]
+        fields = ["updated_at = :updated_at"]
+        values: dict[str, object] = {"updated_at": _utc_now(), "job_id": job_id}
         for column, value in (
             ("status", status),
             ("completed_trials", completed_trials),
@@ -104,60 +137,74 @@ class JobStore:
             ("error", error),
         ):
             if value is not None:
-                fields.append(f"{column} = ?")
-                values.append(value)
+                fields.append(f"{column} = :{column}")
+                values[column] = value
         if result is not None:
-            fields.append("result_json = ?")
-            values.append(json.dumps(result))
-        values.append(job_id)
-        with self._connection() as connection:
+            fields.append("result_json = :result_json")
+            values["result_json"] = json.dumps(result)
+        with self.engine.begin() as connection:
             connection.execute(
-                f"UPDATE optimization_jobs SET {', '.join(fields)} WHERE job_id = ?",
+                text(
+                    f"UPDATE optimization_jobs SET {', '.join(fields)} "
+                    "WHERE job_id = :job_id"
+                ),
                 values,
             )
 
     def queued_ids(self) -> list[str]:
-        with self._connection() as connection:
+        with self.engine.connect() as connection:
             rows = connection.execute(
-                "SELECT job_id FROM optimization_jobs "
-                "WHERE status = 'queued' ORDER BY created_at, rowid"
-            ).fetchall()
+                text(
+                    "SELECT job_id FROM optimization_jobs "
+                    "WHERE status = 'queued' ORDER BY created_at, job_id"
+                )
+            ).mappings().all()
         return [row["job_id"] for row in rows]
 
     def queued_count(self) -> int:
-        with self._connection() as connection:
+        with self.engine.connect() as connection:
             row = connection.execute(
-                "SELECT COUNT(*) AS count FROM optimization_jobs "
-                "WHERE status = 'queued'"
-            ).fetchone()
+                text(
+                    "SELECT COUNT(*) AS count FROM optimization_jobs "
+                    "WHERE status = 'queued'"
+                )
+            ).mappings().first()
         return row["count"]
 
     def queue_snapshot(self) -> tuple[list[str], int]:
-        with self._connection() as connection:
+        with self.engine.connect() as connection:
             queued_rows = connection.execute(
-                "SELECT job_id FROM optimization_jobs "
-                "WHERE status = 'queued' ORDER BY created_at, rowid"
-            ).fetchall()
+                text(
+                    "SELECT job_id FROM optimization_jobs "
+                    "WHERE status = 'queued' ORDER BY created_at, job_id"
+                )
+            ).mappings().all()
             running_row = connection.execute(
-                "SELECT COUNT(*) AS count FROM optimization_jobs "
-                "WHERE status = 'running'"
-            ).fetchone()
+                text(
+                    "SELECT COUNT(*) AS count FROM optimization_jobs "
+                    "WHERE status = 'running'"
+                )
+            ).mappings().first()
         return [row["job_id"] for row in queued_rows], running_row["count"]
 
     def fail_interrupted_jobs(self) -> list[str]:
-        with self._connection() as connection:
+        with self.engine.begin() as connection:
             rows = connection.execute(
-                "SELECT job_id FROM optimization_jobs WHERE status = 'running'"
-            ).fetchall()
+                text(
+                    "SELECT job_id FROM optimization_jobs WHERE status = 'running'"
+                )
+            ).mappings().all()
             connection.execute(
-                """
-                UPDATE optimization_jobs
-                SET status = 'failed',
-                    error = 'Application restarted while this job was running.',
-                    updated_at = ?
-                WHERE status = 'running'
-                """,
-                (_utc_now(),),
+                text(
+                    """
+                    UPDATE optimization_jobs
+                    SET status = 'failed',
+                        error = 'Application restarted while this job was running.',
+                        updated_at = :updated_at
+                    WHERE status = 'running'
+                    """
+                ),
+                {"updated_at": _utc_now()},
             )
         return [row["job_id"] for row in rows]
 
@@ -201,17 +248,26 @@ class OptimizationJobManager:
     def stop(self) -> None:
         self._stop_event.set()
 
-    def submit(self, job_id: str, config: dict, total_trials: int) -> None:
+    def submit(
+        self,
+        job_id: str,
+        config: dict,
+        total_trials: int,
+        user_id: str | None = None,
+    ) -> None:
         with self._submit_lock:
             if self.store.queued_count() >= self.maximum_queued_jobs:
                 raise JobQueueFullError(
                     "The optimization queue is full. Wait for a queued job to start."
                 )
-            self.store.create(job_id, config, total_trials)
+            self.store.create(job_id, config, total_trials, user_id)
             self._queue.put(job_id)
 
-    def get(self, job_id: str) -> dict | None:
-        return self.store.get(job_id)
+    def get(self, job_id: str, user_id: str | None = None) -> dict | None:
+        return self.store.get(job_id, user_id)
+
+    def latest(self, user_id: str | None = None) -> dict | None:
+        return self.store.latest(user_id)
 
     def queue_status(self, job_id: str | None = None) -> dict:
         queued_job_ids, running_jobs = self.store.queue_snapshot()

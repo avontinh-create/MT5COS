@@ -11,3 +11,6 @@ python-multipart
 MetaTrader5
 openpyxl
 pillow
+SQLAlchemy
+psycopg[binary]
+cryptography

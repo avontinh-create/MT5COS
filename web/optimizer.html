@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MT5 AI Optimizer</title>
   <style>
+    [hidden] { display: none !important; }
     :root {
       color-scheme: dark;
       font-family: "Segoe UI", Arial, sans-serif;
@@ -157,6 +158,21 @@
     #system-status h2 { margin: 0; font-size: 17px; color: #f0f7ff; }
     #system-status p { margin: 0; font-size: 13px; overflow-wrap: anywhere; }
     #system-status button { max-width: 260px; }
+    #account-panel {
+      display: grid;
+      gap: 16px;
+      margin: 20px 0;
+      padding: 18px;
+      background: #102840;
+      border: 1px solid #2a4661;
+      border-radius: 12px;
+    }
+    #account-panel h2 { margin: 0; font-size: 17px; color: #f0f7ff; }
+    #account-panel form { margin: 0; }
+    #account-panel button { max-width: 260px; }
+    #account-message { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+    #account-buttons { display: flex; flex-wrap: wrap; gap: 10px; }
+    #account-buttons button { flex: 1 1 180px; }
     @media (max-width: 620px) {
       body { padding: 20px 12px; }
       main { padding: 24px 18px; border-radius: 12px; }
@@ -169,15 +185,52 @@
 <body>
 <main>
   <h1>MT5 AI Optimizer</h1>
-  <p>Chọn tham số EA và cấu hình Strategy Tester trước khi chạy. Thông tin tài khoản MT5 được đọc từ file .env; tên symbol trong CurrencyList sẽ được tự khớp với broker.</p>
-  <section id="system-status" aria-live="polite">
+  <p>Đăng nhập tài khoản của bạn trước. Thông tin MT5 được lưu mã hóa theo từng tài khoản; tên symbol trong CurrencyList sẽ tự khớp với broker.</p>
+  <section id="account-panel" aria-live="polite">
+    <h2>Tài khoản</h2>
+    <p id="account-message">Đang kiểm tra phiên đăng nhập...</p>
+    <form id="account-form">
+      <div class="grid">
+        <label>Email
+          <input id="account-email" type="email" autocomplete="username" required>
+        </label>
+        <label>Mật khẩu
+          <input id="account-password" type="password" minlength="12" maxlength="1024" autocomplete="current-password" required>
+        </label>
+      </div>
+      <div id="account-buttons">
+        <button id="login-button" type="submit">Đăng nhập</button>
+        <button id="register-button" type="button">Đăng ký</button>
+        <button id="account-login-switch" type="button" hidden>Đăng nhập tài khoản riêng</button>
+        <button id="logout-button" type="button" hidden>Đăng xuất</button>
+      </div>
+    </form>
+    <form id="credential-form" hidden>
+      <h2>Kết nối tài khoản MT5</h2>
+      <div class="grid">
+        <label>MT5 login
+          <input name="login" inputmode="numeric" autocomplete="off" required>
+        </label>
+        <label>MT5 server
+          <input name="server" autocomplete="off" required>
+        </label>
+        <label>Mật khẩu MT5
+          <input name="password" type="password" autocomplete="new-password" required>
+        </label>
+      </div>
+      <button type="submit">Lưu thông tin MT5 mã hóa</button>
+    </form>
+  </section>
+  <section id="system-status" aria-live="polite" hidden>
     <h2>Trạng thái MT5</h2>
     <p id="system-status-details">Đang kiểm tra cấu hình máy chủ...</p>
+    <p id="terminal-build-status">Build terminal: chưa kiểm tra kết nối.</p>
+    <p id="latest-job-status"></p>
     <button id="connection-check-button" type="button">Kiểm tra kết nối broker</button>
     <p id="connection-status"></p>
     <span class="help">Kiểm tra sẽ tạm khởi chạy terminal MT5 và đóng phiên kiểm tra sau đó; không đặt lệnh giao dịch. Hãy đóng MT5 portable trước khi kiểm tra.</span>
   </section>
-  <form id="optimizer-form">
+  <form id="optimizer-form" hidden>
     <fieldset>
       <legend>EA và dữ liệu tối ưu</legend>
       <div class="grid">
@@ -186,9 +239,11 @@
         </label>
         <label>File phạm vi tối ưu (.set), nếu có
           <input name="optimization_file" type="file" accept=".set">
+          <span class="help">Nếu file tham số EA chưa bật tham số số nào để tối ưu, hãy tải file phạm vi tương ứng (ví dụ optimization_ranges.set). Không chọn file phạm vi của EA khác.</span>
         </label>
         <label>Tên EA (.ex5)
           <input name="expert_name" value="" placeholder="Ví dụ: Peak.ex5" required>
+          <span class="help">Nhập tên EA .ex5 đã được build sẵn trong MQL5\Experts. Web hiện không build mã nguồn .mq5 và không hiển thị lỗi MetaEditor.</span>
         </label>
         <label>Symbol
           <input name="symbol" value="EURUSD" required>
@@ -233,9 +288,9 @@
         <label>Độ trễ khớp lệnh
           <select name="execution_mode">
             <option value="0" selected>Zero latency, ideal execution</option>
-            <option value="1">Random delay</option>
+            <option value="1">Random delay (MQL5)</option>
           </select>
-          <span class="help">Random delay mô phỏng độ trễ ngẫu nhiên của lệnh.</span>
+          <span id="execution-help" class="help">Theo MQL5: 90% lượt trễ từ 0 đến 8 giây; 10% lượt trễ từ 9 đến 18 giây. Không dùng được với mô hình Open prices only. <a href="https://www.metatrader5.com/en/terminal/help/algotrading/testing#trade_mode" target="_blank" rel="noopener noreferrer">Tài liệu MQL5</a></span>
         </label>
       </div>
     </fieldset>
@@ -243,15 +298,203 @@
     <p class="help">Giới hạn tải: tối đa 100 lượt/job, 5 job chờ trong hàng đợi và 3 yêu cầu tối ưu/phút cho mỗi IP. Khi chạm giới hạn, hãy chờ job hoặc thời gian giới hạn kết thúc rồi thử lại.</p>
     <button id="submit-button" type="submit">Bắt đầu tối ưu</button>
   </form>
-  <section id="status" aria-live="polite"></section>
+  <section id="status" aria-live="polite" hidden></section>
 </main>
 <script>
   const form = document.getElementById("optimizer-form");
   const button = document.getElementById("submit-button");
   const status = document.getElementById("status");
   const systemStatusDetails = document.getElementById("system-status-details");
+  const terminalBuildStatus = document.getElementById("terminal-build-status");
+  const latestJobStatus = document.getElementById("latest-job-status");
   const connectionCheckButton = document.getElementById("connection-check-button");
   const connectionStatus = document.getElementById("connection-status");
+  const accountForm = document.getElementById("account-form");
+  const accountMessage = document.getElementById("account-message");
+  const accountEmail = document.getElementById("account-email");
+  const accountPassword = document.getElementById("account-password");
+  const loginButton = document.getElementById("login-button");
+  const registerButton = document.getElementById("register-button");
+  const accountLoginSwitch = document.getElementById("account-login-switch");
+  const logoutButton = document.getElementById("logout-button");
+  const credentialForm = document.getElementById("credential-form");
+  const systemStatus = document.getElementById("system-status");
+  const modelSelect = form.elements.model;
+  const executionSelect = form.elements.execution_mode;
+  const executionHelp = document.getElementById("execution-help");
+  let workspaceVisible = false;
+
+  function showWorkspace(visible, legacy = false) {
+    workspaceVisible = visible;
+    form.hidden = !visible;
+    systemStatus.hidden = !visible;
+    status.hidden = !visible;
+    accountEmail.disabled = visible;
+    accountPassword.hidden = visible;
+    loginButton.hidden = visible;
+    registerButton.hidden = visible || legacy;
+    accountLoginSwitch.hidden = !visible || !legacy;
+    logoutButton.hidden = !visible || legacy;
+    credentialForm.hidden = !visible || legacy;
+  }
+
+  async function checkAccount() {
+    const response = await fetch("/auth/me");
+    if (!response.ok) {
+      showWorkspace(false);
+      return false;
+    }
+    const account = await response.json();
+    showWorkspace(true, account.legacy_auth);
+    accountMessage.textContent = account.email
+      ? `Đang đăng nhập: ${account.email}`
+      : "Đang dùng chế độ local/Basic Auth cũ.";
+    return true;
+  }
+
+  async function initializeAccount() {
+    const verificationToken = new URLSearchParams(location.search).get("verify");
+    if (verificationToken) {
+      history.replaceState(null, "", location.pathname);
+      try {
+        const response = await fetch("/auth/verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token: verificationToken }),
+        });
+        const result = await response.json();
+        accountMessage.textContent = result.message || result.detail;
+      } catch {
+        accountMessage.textContent = "Không thể xác minh email. Hãy thử lại.";
+      }
+    }
+    try {
+      const configResponse = await fetch("/auth/config");
+      const config = await configResponse.json();
+      registerButton.disabled = !config.registration_enabled;
+      if (!config.registration_enabled) {
+        accountMessage.textContent = config.registration_message;
+      }
+    } catch {
+      registerButton.disabled = true;
+      accountMessage.textContent = "Không thể đọc cấu hình đăng ký.";
+    }
+    try {
+      const authenticated = await checkAccount();
+      if (authenticated) {
+        loadSystemStatus();
+      }
+    } catch {
+      showWorkspace(false);
+      accountMessage.textContent = "Không thể kiểm tra phiên đăng nhập.";
+    }
+  }
+
+  accountForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    loginButton.disabled = true;
+    accountMessage.textContent = "Đang đăng nhập...";
+    try {
+      const response = await fetch("/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: accountEmail.value,
+          password: accountPassword.value,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.detail || "Không thể đăng nhập.");
+      }
+      accountPassword.value = "";
+      if (!await checkAccount()) {
+        throw new Error("Phiên đăng nhập chưa được tạo.");
+      }
+      loadSystemStatus();
+    } catch (error) {
+      accountMessage.textContent = `Đăng nhập thất bại: ${error.message}`;
+    } finally {
+      loginButton.disabled = false;
+    }
+  });
+
+  registerButton.addEventListener("click", async () => {
+    registerButton.disabled = true;
+    accountMessage.textContent = "Đang gửi yêu cầu đăng ký...";
+    try {
+      const response = await fetch("/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: accountEmail.value,
+          password: accountPassword.value,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.detail || "Không thể đăng ký.");
+      }
+      accountPassword.value = "";
+      accountMessage.textContent = result.message;
+    } catch (error) {
+      accountMessage.textContent = `Đăng ký thất bại: ${error.message}`;
+    } finally {
+      registerButton.disabled = false;
+    }
+  });
+
+  logoutButton.addEventListener("click", async () => {
+    try {
+      const response = await fetch("/auth/logout", { method: "POST" });
+      if (!response.ok) {
+        throw new Error("Không thể kết thúc phiên đăng nhập.");
+      }
+      showWorkspace(false);
+      accountMessage.textContent = "Bạn đã đăng xuất.";
+    } catch (error) {
+      accountMessage.textContent = error.message;
+    }
+  });
+
+  accountLoginSwitch.addEventListener("click", () => {
+    showWorkspace(false);
+    accountMessage.textContent = "Đăng nhập bằng tài khoản cá nhân của bạn.";
+  });
+
+  credentialForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const submitButton = credentialForm.querySelector("button");
+    submitButton.disabled = true;
+    accountMessage.textContent = "Đang lưu thông tin MT5 mã hóa...";
+    try {
+      const response = await fetch("/account/mt5", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(Object.fromEntries(new FormData(credentialForm))),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.detail || "Không thể lưu thông tin MT5.");
+      }
+      credentialForm.reset();
+      accountMessage.textContent = "Thông tin MT5 đã được lưu mã hóa.";
+      loadSystemStatus();
+    } catch (error) {
+      accountMessage.textContent = `Lưu MT5 thất bại: ${error.message}`;
+    } finally {
+      submitButton.disabled = false;
+    }
+  });
+
+  function validateExecutionMode() {
+    const incompatible = modelSelect.value === "2" && executionSelect.value === "1";
+    const message = incompatible
+      ? "MQL5 Random Delay không dùng được với mô hình Open prices only."
+      : "";
+    executionSelect.setCustomValidity(message);
+    executionHelp.setAttribute("aria-invalid", String(incompatible));
+  }
 
   async function readJobUntilFinished(jobId, onUpdate) {
     let job;
@@ -272,6 +515,7 @@
   }
 
   async function loadSystemStatus() {
+    if (!workspaceVisible) return;
     try {
       const response = await fetch("/system/status");
       const data = await response.json();
@@ -293,12 +537,25 @@
         available: "có sẵn",
         not_configured: "chưa cấu hình",
         not_checked: "chưa kiểm tra",
+        encryption_key_missing: "thiếu khóa giải mã MT5",
       };
       systemStatusDetails.textContent = Object.entries(labels)
         .map(([key, label]) => `${label}: ${stateLabels[data[key].status] || data[key].status}`)
         .join(" · ") +
         ` · Hàng đợi: ${data.jobs.queued_jobs}/${data.jobs.maximum_queued_jobs} job chờ` +
         ` · Đang chạy: ${data.jobs.running_jobs}`;
+      if (data.latest_job?.terminal_build !== null && data.latest_job?.terminal_build !== undefined) {
+        terminalBuildStatus.textContent = `Build terminal MT5: ${data.latest_job.terminal_build}`;
+      }
+      if (!data.latest_job) {
+        latestJobStatus.textContent = "Chưa có job nào được chạy.";
+      } else {
+        const job = data.latest_job;
+        const progress = `${job.completed_trials}/${job.total_trials} lượt`;
+        latestJobStatus.textContent = job.error
+          ? `Job gần nhất lỗi (${progress}): ${job.error}`
+          : `Job gần nhất: ${job.status} (${progress}).`;
+      }
     } catch (error) {
       systemStatusDetails.textContent = `Không thể kiểm tra cấu hình: ${error.message}`;
     }
@@ -321,6 +578,11 @@
       connectionStatus.textContent =
         `Đã kết nối broker ${job.result.server || ""}` +
         `${job.result.currency ? ` · tiền tệ ${job.result.currency}` : ""}.`;
+      if (job.result.terminal_build !== null && job.result.terminal_build !== undefined) {
+        terminalBuildStatus.textContent =
+          `Build terminal MT5: ${job.result.terminal_build}`;
+      }
+      loadSystemStatus();
     } catch (error) {
       connectionStatus.textContent = `Kiểm tra thất bại: ${error.message}`;
     } finally {
@@ -328,8 +590,11 @@
     }
   });
 
-  loadSystemStatus();
-  loadSystemStatus();
+  window.setInterval(loadSystemStatus, 15000);
+  modelSelect.addEventListener("change", validateExecutionMode);
+  executionSelect.addEventListener("change", validateExecutionMode);
+  validateExecutionMode();
+  initializeAccount();
 
   function addLink(parent, href, text) {
     const link = document.createElement("a");

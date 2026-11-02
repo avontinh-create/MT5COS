@@ -234,7 +234,13 @@ class MT5ConfigBuilder:
                 "MT5 tester model must be 0, 1, 2, or 4 for financial testing."
             )
         if execution_mode not in {0, 1}:
-            raise ValueError("MT5 execution mode must be 0 (no delay) or 1 (random).")
+            raise ValueError(
+                "MT5 execution mode must be 0 (No Delay) or 1 (Random Delay)."
+            )
+        if execution_mode == 1 and model == 2:
+            raise ValueError(
+                "MQL5 Random Delay cannot be used with Open prices only."
+            )
 
         ini_content = f"""[Common]
 Login={login}
@@ -270,9 +276,9 @@ ShutdownTerminal=1
             ("login", login),
             ("password", password),
             ("server", server),
-        ):
+        ):    
             if not value or "\n" in value or "\r" in value:
-                raise ValueError(f"MT5 {label} must be non-empty and single-line.")
+                raise ValueError(f"MT5 {label} must be non-empty and single-line.") 
 
         ini_content = f"""[Common]
 Login={login}

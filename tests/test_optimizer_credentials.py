@@ -161,6 +161,10 @@ class OptimizerCredentialCleanupTests(unittest.TestCase):
         self.assertEqual([update[0:2] for update in progress_updates], [(1, 2), (2, 2)])
         self.assertEqual(result["best_value"], progress_updates[-1][2])
 
+    def test_run_rejects_random_delay_with_open_prices_only(self):
+        with self.assertRaisesRegex(ValueError, "Random Delay.*Open prices only"):
+            self.optimizer.run(model=2, execution_mode=1)
+
 
 if __name__ == "__main__":
     unittest.main()

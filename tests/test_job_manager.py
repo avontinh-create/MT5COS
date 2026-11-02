@@ -51,6 +51,21 @@ class OptimizationJobManagerTests(unittest.TestCase):
             )
             self.assertIsNone(manager.queue_status("active")["queue_position"])
 
+    def test_reads_latest_job_and_result_from_store(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = JobStore(Path(directory) / "jobs.sqlite3")
+            store.create("latest", {"job_id": "latest"}, 1)
+            store.update(
+                "latest",
+                status="completed",
+                result={"terminal_build": 5000},
+            )
+
+            latest = store.latest()
+
+            self.assertEqual(latest["job_id"], "latest")
+            self.assertEqual(latest["result"]["terminal_build"], 5000)
+
     def test_runs_job_and_persists_progress_and_result(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
