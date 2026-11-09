@@ -3,6 +3,7 @@ import hmac
 import os
 import secrets
 import smtplib
+import ssl
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from uuid import uuid4
@@ -21,6 +22,7 @@ from app.services.database import (
 
 SESSION_DURATION = timedelta(hours=12)
 VERIFICATION_DURATION = timedelta(hours=24)
+PASSWORD_RESET_DURATION = timedelta(hours=1)
 PASSWORD_SCRYPT_N = 2**14
 
 
@@ -152,6 +154,54 @@ class AuthStore:
             )
         return result.rowcount == 1
 
+    def create_password_reset(self, email: str, token: str) -> bool:
+        now = _utc_now()
+        with self.engine.begin() as connection:
+            result = connection.execute(
+                update(users)
+                .where(users.c.email == email, users.c.email_verified == 1)
+                .values(
+                    password_reset_token_hash=_token_digest(token),
+                    password_reset_expires_at=_timestamp(
+                        now + PASSWORD_RESET_DURATION
+                    ),
+                )
+            )
+        return result.rowcount == 1
+
+    def reset_password(self, token: str, new_password: str) -> bool:
+        now = _timestamp(_utc_now())
+        with self.engine.begin() as connection:
+            user_id = connection.execute(
+                select(users.c.user_id).where(
+                    users.c.password_reset_token_hash == _token_digest(token),
+                    users.c.password_reset_expires_at > now,
+                    users.c.email_verified == 1,
+                )
+            ).scalar_one_or_none()
+            if user_id is None:
+                return False
+            result = connection.execute(
+                update(users)
+                .where(
+                    users.c.user_id == user_id,
+                    users.c.password_reset_token_hash == _token_digest(token),
+                    users.c.password_reset_expires_at > now,
+                    users.c.email_verified == 1,
+                )
+                .values(
+                    password_hash=_password_hash(new_password),
+                    password_reset_token_hash=None,
+                    password_reset_expires_at=None,
+                )
+            )
+            if result.rowcount != 1:
+                return False
+            connection.execute(
+                delete(web_sessions).where(web_sessions.c.user_id == user_id)
+            )
+        return True
+
     def create_session(self, user_id: str) -> tuple[str, datetime]:
         token = secrets.token_urlsafe(32)
         now = _utc_now()
@@ -258,28 +308,52 @@ class AuthStore:
         return row[0] if row is not None else None
 
 
-def send_verification_email(email: str, token: str) -> None:
+def send_account_email(email: str, token: str, purpose: str) -> None:
     host = os.getenv("MT5_SMTP_HOST", "")
     sender = os.getenv("MT5_SMTP_FROM", "")
     base_url = os.getenv("MT5_PUBLIC_BASE_URL", "").rstrip("/")
     if not host or not sender or not base_url.startswith("https://"):
         raise RuntimeError(
-            "Email verification requires SMTP host/from and an HTTPS public base URL."
+            "Account email requires SMTP host/from and an HTTPS public base URL."
         )
 
     message = EmailMessage()
-    message["Subject"] = "Verify your MT5 AI Optimizer account"
     message["From"] = sender
     message["To"] = email
-    message.set_content(
-        "Verify your account within 24 hours by opening this link:\n\n"
-        f"{base_url}/ui?verify={token}\n"
-    )
-    with smtplib.SMTP_SSL(
-        host,
-        int(os.getenv("MT5_SMTP_PORT", "465")),
-        timeout=15,
-    ) as smtp:
+    if purpose == "verify":
+        message["Subject"] = "Verify your MT5 AI Optimizer account"
+        message.set_content(
+            "Verify your account within 24 hours by opening this link:\n\n"
+            f"{base_url}/ui?verify={token}\n"
+        )
+    elif purpose == "password_reset":
+        message["Subject"] = "Reset your MT5 AI Optimizer password"
+        message.set_content(
+            "A password reset was requested for your account. "
+            "If you made this request, reset your password within one hour:\n\n"
+            f"{base_url}/ui?reset={token}\n\n"
+            "If you did not request this, you can ignore this message."
+        )
+    else:
+        raise ValueError(f"Unsupported account email purpose: {purpose}")
+    smtp_port = int(os.getenv("MT5_SMTP_PORT", "465"))
+    if os.getenv("MT5_SMTP_USE_SSL", "1").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        smtp_connection = smtplib.SMTP_SSL(
+            host,
+            smtp_port,
+            timeout=15,
+            context=ssl.create_default_context(),
+        )
+    else:
+        smtp_connection = smtplib.SMTP(host, smtp_port, timeout=15)
+    with smtp_connection as smtp:
+        if not isinstance(smtp, smtplib.SMTP_SSL):
+            smtp.starttls(context=ssl.create_default_context())
         username = os.getenv("MT5_SMTP_USERNAME", "")
         password = os.getenv("MT5_SMTP_PASSWORD", "")
         if username:

@@ -18,7 +18,15 @@ from pathlib import Path
 
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import (
+    BackgroundTasks,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+)
 from pydantic import BaseModel, Field
 from fastapi.responses import FileResponse, JSONResponse, Response
 
@@ -31,7 +39,7 @@ from app.services.ai_engine.optimizer import AIOptimizer
 from app.services.auth_store import (
     AuthStore,
     has_valid_credential_encryption_key,
-    send_verification_email,
+    send_account_email,
 )
 from app.services.database import Database
 from app.services.mt5_engine.runner import MT5BacktestRunner
@@ -85,6 +93,7 @@ optimization_rate_limiter = OptimizationRateLimiter(
 )
 auth_rate_limiter = OptimizationRateLimiter(10, 15 * 60)
 signup_rate_limiter = OptimizationRateLimiter(5, 60 * 60)
+recovery_rate_limiter = OptimizationRateLimiter(5, 60 * 60)
 database = Database(os.getenv("DATABASE_URL", str(JOB_DATABASE_PATH)))
 auth_store = AuthStore(database)
 job_manager = OptimizationJobManager(
@@ -112,6 +121,8 @@ async def require_web_auth(request: Request, call_next):
         "/ui",
         "/auth/config",
         "/auth/register",
+        "/auth/recovery",
+        "/auth/password-reset",
         "/auth/verify",
         "/auth/login",
     }:
@@ -194,6 +205,15 @@ class VerifyPayload(BaseModel):
     token: str = Field(min_length=32, max_length=256)
 
 
+class AccountRecoveryPayload(BaseModel):
+    email: str = Field(max_length=320)
+
+
+class PasswordResetPayload(BaseModel):
+    token: str = Field(min_length=32, max_length=256)
+    new_password: str = Field(min_length=12, max_length=1024)
+
+
 class MT5CredentialPayload(BaseModel):
     login: str = Field(min_length=1, max_length=32)
     password: str = Field(min_length=1, max_length=256)
@@ -213,6 +233,25 @@ def _legacy_basic_auth_enabled() -> bool:
     }
 
 
+def _account_email_configured() -> bool:
+    smtp_username = os.getenv("MT5_SMTP_USERNAME", "")
+    smtp_password = os.getenv("MT5_SMTP_PASSWORD", "")
+    return (
+        bool(os.getenv("MT5_SMTP_HOST"))
+        and bool(os.getenv("MT5_SMTP_FROM"))
+        and bool(os.getenv("MT5_PUBLIC_BASE_URL", "").startswith("https://"))
+        and bool(_environment_flag("MT5_ACCOUNT_RECOVERY_READY"))
+        and bool(smtp_username) == bool(smtp_password)
+    )
+
+
+def _account_recovery_enabled() -> bool:
+    return (
+        _environment_flag("MT5_ACCOUNT_RECOVERY_ENABLED")
+        and _account_email_configured()
+    )
+
+
 def _signup_disabled_reason() -> str | None:
     if not _environment_flag("MT5_PUBLIC_SIGNUP_ENABLED"):
         return "Public registration is disabled by the server."
@@ -225,14 +264,8 @@ def _signup_disabled_reason() -> str | None:
         return "Email verification must be enabled before public registration."
     if not _environment_flag("MT5_ACCOUNT_RECOVERY_READY"):
         return "Account recovery support must be ready before public registration."
-    if not os.getenv("MT5_SMTP_HOST") or not os.getenv("MT5_SMTP_FROM"):
-        return "SMTP host and sender must be configured for email verification."
-    smtp_username = os.getenv("MT5_SMTP_USERNAME", "")
-    smtp_password = os.getenv("MT5_SMTP_PASSWORD", "")
-    if bool(smtp_username) != bool(smtp_password):
-        return "Configure both SMTP username and password, or neither."
-    if not os.getenv("MT5_PUBLIC_BASE_URL", "").startswith("https://"):
-        return "Public registration requires an HTTPS MT5_PUBLIC_BASE_URL."
+    if not _account_recovery_enabled():
+        return "Enable and configure account password recovery before public registration."
     if not _environment_flag("MT5_COOKIE_SECURE"):
         return "Secure session cookies must be enabled for public registration."
     if not has_valid_credential_encryption_key():
@@ -253,9 +286,11 @@ def _client_ip(request: Request) -> str:
 
 @app.get("/auth/config")
 def get_auth_config():
+    registration_disabled_reason = _signup_disabled_reason()
     return {
-        "registration_enabled": _signup_disabled_reason() is None,
-        "registration_message": _signup_disabled_reason(),
+        "registration_enabled": registration_disabled_reason is None,
+        "registration_message": registration_disabled_reason,
+        "recovery_enabled": _account_recovery_enabled(),
     }
 
 
@@ -282,7 +317,7 @@ def register_account(payload: RegisterPayload, request: Request):
     user_id = auth_store.create_user(email, payload.password, verification_token)
     if user_id is not None:
         try:
-            send_verification_email(email, verification_token)
+            send_account_email(email, verification_token, "verify")
         except (OSError, smtplib.SMTPException, RuntimeError, ValueError) as exc:
             auth_store.delete_unverified_user(user_id)
             logger.exception("Could not send account verification email")
@@ -295,6 +330,57 @@ def register_account(payload: RegisterPayload, request: Request):
             "If this email can be registered, a verification link will be sent."
         )
     }
+
+
+def _send_password_reset_email(email: str, token: str) -> None:
+    try:
+        send_account_email(email, token, "password_reset")
+    except (OSError, smtplib.SMTPException, RuntimeError, ValueError):
+        logger.exception("Could not send password reset email")
+
+
+@app.post("/auth/recovery", status_code=202)
+def request_password_reset(
+    payload: AccountRecoveryPayload,
+    request: Request,
+    background_tasks: BackgroundTasks,
+):
+    if not _account_recovery_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail="Account recovery email is not configured on this server.",
+        )
+    retry_after = recovery_rate_limiter.acquire(_client_ip(request))
+    if retry_after is not None:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many recovery requests. Try again in {retry_after} seconds.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    email = payload.email.strip().lower()
+    if re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        token = secrets.token_urlsafe(32)
+        if auth_store.create_password_reset(email, token):
+            background_tasks.add_task(_send_password_reset_email, email, token)
+    return {
+        "message": (
+            "If a verified account matches that email, a password reset link "
+            "will be sent."
+        )
+    }
+
+
+@app.post("/auth/password-reset")
+def reset_account_password(payload: PasswordResetPayload):
+    if len(payload.new_password.encode("utf-8")) > 1024:
+        raise HTTPException(status_code=422, detail="Password is too long.")
+    if not auth_store.reset_password(payload.token, payload.new_password):
+        raise HTTPException(
+            status_code=400,
+            detail="Password reset link is invalid or has expired.",
+        )
+    return {"message": "Password reset. Sign in with your new password."}
 
 
 @app.post("/auth/verify")

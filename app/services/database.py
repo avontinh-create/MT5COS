@@ -27,6 +27,8 @@ users = Table(
     Column("email_verified", Integer, nullable=False, server_default="0"),
     Column("verification_token_hash", String(64)),
     Column("verification_expires_at", String(40)),
+    Column("password_reset_token_hash", String(64)),
+    Column("password_reset_expires_at", String(40)),
     Column("created_at", String(40), nullable=False),
 )
 
@@ -78,7 +80,13 @@ class Database:
             path.parent.mkdir(parents=True, exist_ok=True)
             url = URL.create("sqlite", database=str(path))
         else:
-            url = database_url
+            url = (
+                database_url.replace(
+                    "postgresql://", "postgresql+psycopg://", 1
+                )
+                if database_url.startswith("postgresql://")
+                else database_url
+            )
             if "://" not in url:
                 path = Path(url).resolve()
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -93,7 +101,25 @@ class Database:
             engine_options["poolclass"] = NullPool
         self.engine: Engine = create_engine(url, **engine_options)
         metadata.create_all(self.engine)
+        self._add_user_recovery_columns()
         self._add_legacy_job_owner_column()
+
+    def _add_user_recovery_columns(self) -> None:
+        columns = {
+            column["name"] for column in inspect(self.engine).get_columns("users")
+        }
+        statements = {
+            "password_reset_token_hash": (
+                "ALTER TABLE users ADD COLUMN password_reset_token_hash VARCHAR(64)"
+            ),
+            "password_reset_expires_at": (
+                "ALTER TABLE users ADD COLUMN password_reset_expires_at VARCHAR(40)"
+            ),
+        }
+        with self.engine.begin() as connection:
+            for name, statement in statements.items():
+                if name not in columns:
+                    connection.exec_driver_sql(statement)
 
     def _add_legacy_job_owner_column(self) -> None:
         columns = {

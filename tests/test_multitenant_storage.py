@@ -1,3 +1,4 @@
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -5,7 +6,7 @@ from unittest.mock import patch
 
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 
 import main
 from app.services.ai_engine.job_manager import JobStore, OptimizationJobManager
@@ -14,6 +15,74 @@ from app.services.database import Database
 
 
 class MultiTenantStorageTests(unittest.TestCase):
+    def test_postgres_url_uses_installed_psycopg_driver(self):
+        with (
+            patch("app.services.database.metadata.create_all"),
+            patch.object(Database, "_add_user_recovery_columns"),
+            patch.object(Database, "_add_legacy_job_owner_column"),
+        ):
+            database = Database(
+                "postgresql://optimizer:secret@localhost/optimizer"
+            )
+        try:
+            self.assertEqual(database.engine.url.drivername, "postgresql+psycopg")
+        finally:
+            database.engine.dispose()
+
+    def test_existing_database_is_upgraded_for_recovery_and_legacy_jobs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "legacy.sqlite3"
+            connection = sqlite3.connect(database_path)
+            connection.executescript(
+                """
+                CREATE TABLE users (
+                    user_id VARCHAR(32) PRIMARY KEY,
+                    email VARCHAR(320) NOT NULL UNIQUE,
+                    password_hash VARCHAR(256) NOT NULL,
+                    email_verified INTEGER NOT NULL,
+                    verification_token_hash VARCHAR(64),
+                    verification_expires_at VARCHAR(40),
+                    created_at VARCHAR(40) NOT NULL
+                );
+                CREATE TABLE optimization_jobs (
+                    job_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    completed_trials INTEGER NOT NULL DEFAULT 0,
+                    total_trials INTEGER NOT NULL,
+                    best_value REAL,
+                    error TEXT,
+                    config_json TEXT NOT NULL,
+                    result_json TEXT
+                );
+                INSERT INTO optimization_jobs
+                    (job_id, status, created_at, updated_at, total_trials, config_json)
+                VALUES ('old-job', 'completed', 'now', 'now', 1, '{}');
+                """
+            )
+            connection.close()
+
+            database = Database(database_path)
+            try:
+                user_columns = {
+                    column["name"]
+                    for column in inspect(database.engine).get_columns("users")
+                }
+                with database.engine.connect() as connection:
+                    legacy_owner = connection.execute(
+                        text(
+                            "SELECT user_id FROM optimization_jobs "
+                            "WHERE job_id = 'old-job'"
+                        )
+                    ).scalar_one()
+
+                self.assertIn("password_reset_token_hash", user_columns)
+                self.assertIn("password_reset_expires_at", user_columns)
+                self.assertEqual(legacy_owner, main.LEGACY_USER_ID)
+            finally:
+                database.engine.dispose()
+
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp_dir.cleanup)
@@ -103,6 +172,77 @@ class MultiTenantStorageTests(unittest.TestCase):
         )
         self.auth_store.delete_session(token)
         self.assertIsNone(self.auth_store.get_session_user(token))
+
+    def test_password_reset_is_single_use_and_revokes_sessions(self):
+        session_token, _ = self.auth_store.create_session(self.user_a)
+        reset_token = "one-time-password-reset-token"
+        self.assertTrue(
+            self.auth_store.create_password_reset("a@example.test", reset_token)
+        )
+
+        self.assertTrue(
+            self.auth_store.reset_password(
+                reset_token, "new-correct-horse-battery-2"
+            )
+        )
+        self.assertFalse(
+            self.auth_store.reset_password(
+                reset_token, "another-correct-horse-battery-3"
+            )
+        )
+        self.assertIsNone(self.auth_store.get_session_user(session_token))
+        self.assertIsNotNone(
+            self.auth_store.authenticate(
+                "a@example.test", "new-correct-horse-battery-2"
+            )
+        )
+
+    def test_password_recovery_api_hides_account_existence(self):
+        original_auth_store = main.auth_store
+        main.auth_store = self.auth_store
+        environment = {
+            "MT5_ACCOUNT_RECOVERY_ENABLED": "1",
+            "MT5_ACCOUNT_RECOVERY_READY": "1",
+            "MT5_SMTP_HOST": "smtp.example.test",
+            "MT5_SMTP_FROM": "noreply@example.test",
+            "MT5_PUBLIC_BASE_URL": "https://optimizer.example.test",
+            "MT5_LEGACY_BASIC_AUTH_ENABLED": "0",
+        }
+        try:
+            with (
+                patch.dict("os.environ", environment),
+                patch.object(main, "send_account_email") as send_email,
+                TestClient(main.app) as client,
+            ):
+                known = client.post(
+                    "/auth/recovery", json={"email": "a@example.test"}
+                )
+                unknown = client.post(
+                    "/auth/recovery", json={"email": "missing@example.test"}
+                )
+
+                self.assertEqual(known.status_code, 202)
+                self.assertEqual(known.json(), unknown.json())
+                send_email.assert_called_once()
+                _, reset_token, purpose = send_email.call_args.args
+                self.assertEqual(purpose, "password_reset")
+
+                session_token, _ = self.auth_store.create_session(self.user_a)
+                client.cookies.set(main.SESSION_COOKIE_NAME, session_token)
+                reset = client.post(
+                    "/auth/password-reset",
+                    json={
+                        "token": reset_token,
+                        "new_password": "updated-correct-horse-battery",
+                    },
+                )
+                self.assertEqual(reset.status_code, 200)
+                self.assertEqual(
+                    client.get("/auth/me").status_code,
+                    401,
+                )
+        finally:
+            main.auth_store = original_auth_store
 
     def test_login_creates_session_and_credentials_can_be_saved(self):
         original_auth_store = main.auth_store

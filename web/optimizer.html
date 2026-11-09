@@ -201,6 +201,7 @@
       <div id="account-buttons">
         <button id="login-button" type="submit">Đăng nhập</button>
         <button id="register-button" type="button">Đăng ký</button>
+        <button id="recovery-button" type="button">Quên mật khẩu</button>
         <button id="account-login-switch" type="button" hidden>Đăng nhập tài khoản riêng</button>
         <button id="logout-button" type="button" hidden>Đăng xuất</button>
       </div>
@@ -315,6 +316,7 @@
   const accountPassword = document.getElementById("account-password");
   const loginButton = document.getElementById("login-button");
   const registerButton = document.getElementById("register-button");
+  const recoveryButton = document.getElementById("recovery-button");
   const accountLoginSwitch = document.getElementById("account-login-switch");
   const logoutButton = document.getElementById("logout-button");
   const credentialForm = document.getElementById("credential-form");
@@ -323,6 +325,9 @@
   const executionSelect = form.elements.execution_mode;
   const executionHelp = document.getElementById("execution-help");
   let workspaceVisible = false;
+  let accountMode = "login";
+  let passwordResetToken = null;
+  let recoveryEnabled = false;
 
   function showWorkspace(visible, legacy = false) {
     workspaceVisible = visible;
@@ -333,9 +338,30 @@
     accountPassword.hidden = visible;
     loginButton.hidden = visible;
     registerButton.hidden = visible || legacy;
+    recoveryButton.hidden = visible || legacy || !recoveryEnabled;
     accountLoginSwitch.hidden = !visible || !legacy;
     logoutButton.hidden = !visible || legacy;
     credentialForm.hidden = !visible || legacy;
+  }
+
+  function setAccountMode(mode) {
+    accountMode = mode;
+    const emailLabel = accountEmail.closest("label");
+    const passwordLabel = accountPassword.closest("label");
+    emailLabel.hidden = mode === "reset";
+    accountEmail.disabled = mode === "reset" || workspaceVisible;
+    accountEmail.required = mode !== "reset";
+    passwordLabel.hidden = mode === "recovery";
+    accountPassword.disabled = mode === "recovery";
+    accountPassword.required = mode !== "recovery";
+    loginButton.textContent = mode === "recovery"
+      ? "Gửi liên kết đặt lại"
+      : mode === "reset"
+        ? "Đặt lại mật khẩu"
+        : "Đăng nhập";
+    registerButton.hidden = mode !== "login" || workspaceVisible;
+    recoveryButton.hidden =
+      mode !== "login" || workspaceVisible || !recoveryEnabled;
   }
 
   async function checkAccount() {
@@ -354,6 +380,13 @@
 
   async function initializeAccount() {
     const verificationToken = new URLSearchParams(location.search).get("verify");
+    passwordResetToken = new URLSearchParams(location.search).get("reset");
+    if (passwordResetToken) {
+      history.replaceState(null, "", location.pathname);
+      setAccountMode("reset");
+      showWorkspace(false);
+      accountMessage.textContent = "Nhập mật khẩu mới để hoàn tất khôi phục.";
+    }
     if (verificationToken) {
       history.replaceState(null, "", location.pathname);
       try {
@@ -371,7 +404,9 @@
     try {
       const configResponse = await fetch("/auth/config");
       const config = await configResponse.json();
+      recoveryEnabled = config.recovery_enabled;
       registerButton.disabled = !config.registration_enabled;
+      setAccountMode(accountMode);
       if (!config.registration_enabled) {
         accountMessage.textContent = config.registration_message;
       }
@@ -380,6 +415,9 @@
       accountMessage.textContent = "Không thể đọc cấu hình đăng ký.";
     }
     try {
+      if (passwordResetToken) {
+        return;
+      }
       const authenticated = await checkAccount();
       if (authenticated) {
         loadSystemStatus();
@@ -393,30 +431,68 @@
   accountForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     loginButton.disabled = true;
-    accountMessage.textContent = "Đang đăng nhập...";
+    accountMessage.textContent = accountMode === "recovery"
+      ? "Đang yêu cầu khôi phục..."
+      : accountMode === "reset"
+        ? "Đang đổi mật khẩu..."
+        : "Đang đăng nhập...";
     try {
-      const response = await fetch("/auth/login", {
+      let endpoint = "/auth/login";
+      let body = {
+        email: accountEmail.value,
+        password: accountPassword.value,
+      };
+      if (accountMode === "recovery") {
+        endpoint = "/auth/recovery";
+        body = { email: accountEmail.value };
+      } else if (accountMode === "reset") {
+        endpoint = "/auth/password-reset";
+        body = {
+          token: passwordResetToken,
+          new_password: accountPassword.value,
+        };
+      }
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: accountEmail.value,
-          password: accountPassword.value,
-        }),
+        body: JSON.stringify(body),
       });
       const result = await response.json();
       if (!response.ok) {
-        throw new Error(result.detail || "Không thể đăng nhập.");
+        throw new Error(result.detail || "Yêu cầu không thành công.");
       }
-      accountPassword.value = "";
-      if (!await checkAccount()) {
-        throw new Error("Phiên đăng nhập chưa được tạo.");
+      if (accountMode === "recovery") {
+        accountPassword.value = "";
+        accountMessage.textContent = result.message;
+      } else if (accountMode === "reset") {
+        passwordResetToken = null;
+        accountPassword.value = "";
+        setAccountMode("login");
+        accountMessage.textContent = result.message;
+      } else {
+        accountPassword.value = "";
+        if (!await checkAccount()) {
+          throw new Error("Phiên đăng nhập chưa được tạo.");
+        }
+        loadSystemStatus();
       }
-      loadSystemStatus();
     } catch (error) {
-      accountMessage.textContent = `Đăng nhập thất bại: ${error.message}`;
+      accountMessage.textContent = `Không thành công: ${error.message}`;
     } finally {
       loginButton.disabled = false;
     }
+  });
+
+  recoveryButton.addEventListener("click", () => {
+    setAccountMode("recovery");
+    accountMessage.textContent =
+      "Nhập email đã xác minh. Nếu tài khoản tồn tại, liên kết khôi phục sẽ được gửi.";
+  });
+
+  accountLoginSwitch.addEventListener("click", () => {
+    setAccountMode("login");
+    showWorkspace(false);
+    accountMessage.textContent = "Đăng nhập bằng tài khoản cá nhân của bạn.";
   });
 
   registerButton.addEventListener("click", async () => {
@@ -455,11 +531,6 @@
     } catch (error) {
       accountMessage.textContent = error.message;
     }
-  });
-
-  accountLoginSwitch.addEventListener("click", () => {
-    showWorkspace(false);
-    accountMessage.textContent = "Đăng nhập bằng tài khoản cá nhân của bạn.";
   });
 
   credentialForm.addEventListener("submit", async (event) => {

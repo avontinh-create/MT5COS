@@ -26,8 +26,10 @@ in the browser, source control, or chat.
    PostgreSQL driver is installed from `requirements.txt`. Keep the database
    private to the application host and back it up independently.
 6. To prepare multi-user accounts, configure the SMTP host, port, sender and
-   optional SMTP username/password; set `MT5_PUBLIC_BASE_URL` to the final
-   HTTPS origin; generate a Fernet key on the server with
+   optional SMTP username/password. `MT5_SMTP_USE_SSL=1` uses implicit TLS
+   (usually port 465); set it to `0` to require STARTTLS (usually port 587).
+   Set `MT5_PUBLIC_BASE_URL` to the final HTTPS origin; generate a Fernet key
+   on the server with
    `.\venv\Scripts\python.exe -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
    and store it only in `MT5_CREDENTIAL_ENCRYPTION_KEY`. Protect and back up
    this key separately from PostgreSQL. Losing it makes stored MT5 passwords
@@ -66,11 +68,13 @@ require an authenticated session.
 Public registration is disabled by default. Enable it only after PostgreSQL,
 HTTPS, SMTP and the encryption key are configured, then set
 `MT5_PUBLIC_SIGNUP_ENABLED=1`, `MT5_EMAIL_VERIFICATION_ENABLED=1`, and
-`MT5_COOKIE_SECURE=1`. Set `MT5_LEGACY_BASIC_AUTH_ENABLED=0` and
-`MT5_ACCOUNT_RECOVERY_READY=1` only after a recovery/support process is ready;
+`MT5_ACCOUNT_RECOVERY_ENABLED=1`, `MT5_COOKIE_SECURE=1`, and
+`MT5_LEGACY_BASIC_AUTH_ENABLED=0`. Set `MT5_ACCOUNT_RECOVERY_READY=1` only
+after a recovery/support process is ready;
 the shared Basic Auth path is intentionally incompatible with public
-multi-user mode. This initial foundation does not yet provide self-service
-password reset. Registration uses email verification links
+multi-user mode. Users can request a password-reset link; tokens expire after
+one hour and a successful reset invalidates all existing sessions.
+Registration uses email verification links
 that expire after 24 hours; passwords are stored using scrypt, sessions as
 hashed tokens, and MT5 passwords encrypted with the external Fernet key. The
 key must remain available to the application/worker and must not be stored in
