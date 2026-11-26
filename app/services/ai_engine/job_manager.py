@@ -1,15 +1,14 @@
 import json
 import logging
-import queue
 import shutil
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from sqlalchemy import text
+from sqlalchemy import func, select, text, update
 
-from app.services.database import Database
+from app.services.database import Database, database_mutex, optimization_jobs
 
 
 logger = logging.getLogger(__name__)
@@ -44,9 +43,25 @@ class JobStore:
         config: dict,
         total_trials: int,
         user_id: str | None = None,
+        maximum_queued_jobs: int | None = None,
     ) -> None:
         now = _utc_now()
         with self.engine.begin() as connection:
+            connection.execute(
+                update(database_mutex)
+                .where(database_mutex.c.lock_id == 1)
+                .values(revision=database_mutex.c.revision + 1)
+            )
+            if maximum_queued_jobs is not None:
+                queued_count = connection.execute(
+                    select(func.count())
+                    .select_from(optimization_jobs)
+                    .where(optimization_jobs.c.status == "queued")
+                ).scalar_one()
+                if queued_count >= maximum_queued_jobs:
+                    raise JobQueueFullError(
+                        "The optimization queue is full. Wait for a queued job to start."
+                    )
             connection.execute(
                 text(
                     """
@@ -68,6 +83,43 @@ class JobStore:
                     "config_json": json.dumps(config),
                 },
             )
+
+    def claim_next_job(self) -> dict | None:
+        with self.engine.begin() as connection:
+            connection.execute(
+                update(database_mutex)
+                .where(database_mutex.c.lock_id == 1)
+                .values(revision=database_mutex.c.revision + 1)
+            )
+            candidate = connection.execute(
+                select(optimization_jobs.c.job_id)
+                .where(optimization_jobs.c.status == "queued")
+                .order_by(
+                    optimization_jobs.c.created_at,
+                    optimization_jobs.c.job_id,
+                )
+                .limit(1)
+            ).scalar_one_or_none()
+            if candidate is None:
+                return None
+
+            claimed = connection.execute(
+                update(optimization_jobs)
+                .where(
+                    optimization_jobs.c.job_id == candidate,
+                    optimization_jobs.c.status == "queued",
+                )
+                .values(status="running", updated_at=_utc_now())
+            )
+            if claimed.rowcount != 1:
+                return None
+
+            row = connection.execute(
+                select(optimization_jobs).where(
+                    optimization_jobs.c.job_id == candidate
+                )
+            ).mappings().first()
+            return _decode_job_row(row)
 
     def get(self, job_id: str, user_id: str | None = None) -> dict | None:
         statement = "SELECT * FROM optimization_jobs WHERE job_id = :job_id"
@@ -93,6 +145,21 @@ class JobStore:
                 text(statement), parameters
             ).mappings().first()
         return _decode_job_row(row)
+
+    def list_recent(
+        self, user_id: str, *, limit: int = 20, offset: int = 0
+    ) -> list[dict]:
+        statement = (
+            "SELECT * FROM optimization_jobs WHERE user_id = :user_id "
+            "ORDER BY created_at DESC, job_id DESC "
+            "LIMIT :limit OFFSET :offset"
+        )
+        with self.engine.connect() as connection:
+            rows = connection.execute(
+                text(statement),
+                {"user_id": user_id, "limit": limit, "offset": offset},
+            ).mappings().all()
+        return [_decode_job_row(row) for row in rows]
 
     def owns_result_file(
         self, user_id: str, filename: str, *, is_report: bool = False
@@ -223,10 +290,8 @@ class OptimizationJobManager:
         self.jobs_directory = Path(jobs_directory).resolve()
         self.run_job = run_job
         self.maximum_queued_jobs = maximum_queued_jobs
-        self._queue: queue.Queue[str | None] = queue.Queue()
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
-        self._submit_lock = threading.Lock()
         self._stop_event = threading.Event()
 
     def start(self) -> None:
@@ -234,10 +299,6 @@ class OptimizationJobManager:
             if self._thread is not None and self._thread.is_alive():
                 return
             self._stop_event.clear()
-            for job_id in self.store.fail_interrupted_jobs():
-                self._remove_upload_directory(job_id)
-            for job_id in self.store.queued_ids():
-                self._queue.put(job_id)
             self._thread = threading.Thread(
                 target=self._work,
                 name="mt5-optimization-jobs",
@@ -247,6 +308,10 @@ class OptimizationJobManager:
 
     def stop(self) -> None:
         self._stop_event.set()
+        with self._lock:
+            thread = self._thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=5)
 
     def submit(
         self,
@@ -255,19 +320,24 @@ class OptimizationJobManager:
         total_trials: int,
         user_id: str | None = None,
     ) -> None:
-        with self._submit_lock:
-            if self.store.queued_count() >= self.maximum_queued_jobs:
-                raise JobQueueFullError(
-                    "The optimization queue is full. Wait for a queued job to start."
-                )
-            self.store.create(job_id, config, total_trials, user_id)
-            self._queue.put(job_id)
+        self.store.create(
+            job_id,
+            config,
+            total_trials,
+            user_id,
+            maximum_queued_jobs=self.maximum_queued_jobs,
+        )
 
     def get(self, job_id: str, user_id: str | None = None) -> dict | None:
         return self.store.get(job_id, user_id)
 
     def latest(self, user_id: str | None = None) -> dict | None:
         return self.store.latest(user_id)
+
+    def list_recent(
+        self, user_id: str, *, limit: int = 20, offset: int = 0
+    ) -> list[dict]:
+        return self.store.list_recent(user_id, limit=limit, offset=offset)
 
     def queue_status(self, job_id: str | None = None) -> dict:
         queued_job_ids, running_jobs = self.store.queue_snapshot()
@@ -283,45 +353,52 @@ class OptimizationJobManager:
         }
 
     def _work(self) -> None:
-        while True:
-            if self._stop_event.is_set():
-                return
-            job_id = self._queue.get()
-            if job_id is None:
-                return
-            record = self.store.get(job_id)
-            if record is None or record["status"] != "queued":
-                continue
+        from app.services.ai_engine.worker_lock import MT5WorkerLock
 
-            self.store.update(job_id, status="running")
-            config = record["config"]
+        worker_lock = MT5WorkerLock(self.jobs_directory / "mt5-worker.lock")
+        while not self._stop_event.is_set():
+            with worker_lock.acquire(self._stop_event) as acquired:
+                if not acquired:
+                    continue
+                for interrupted_job_id in self.store.fail_interrupted_jobs():
+                    self._remove_upload_directory(interrupted_job_id)
+                while not self._stop_event.is_set():
+                    record = self.store.claim_next_job()
+                    if record is None:
+                        self._stop_event.wait(0.5)
+                        continue
+                    self._run_record(record)
 
-            def progress(
-                completed_trials: int,
-                total_trials: int,
-                best_value: float | None,
-            ) -> None:
-                self.store.update(
-                    job_id,
-                    completed_trials=completed_trials,
-                    best_value=best_value,
-                )
+    def _run_record(self, record: dict) -> None:
+        job_id = record["job_id"]
+        config = record["config"]
 
-            try:
-                result = self.run_job(config, progress)
-            except Exception as exc:
-                logger.exception("Optimization job %s failed", job_id)
-                self.store.update(job_id, status="failed", error=str(exc))
-            else:
-                self.store.update(
-                    job_id,
-                    status="completed",
-                    completed_trials=record["total_trials"],
-                    best_value=result.get("best_value"),
-                    result=result,
-                )
-            finally:
-                self._remove_upload_directory(job_id)
+        def progress(
+            completed_trials: int,
+            total_trials: int,
+            best_value: float | None,
+        ) -> None:
+            self.store.update(
+                job_id,
+                completed_trials=completed_trials,
+                best_value=best_value,
+            )
+
+        try:
+            result = self.run_job(config, progress)
+        except Exception as exc:
+            logger.exception("Optimization job %s failed", job_id)
+            self.store.update(job_id, status="failed", error=str(exc))
+        else:
+            self.store.update(
+                job_id,
+                status="completed",
+                completed_trials=record["total_trials"],
+                best_value=result.get("best_value"),
+                result=result,
+            )
+        finally:
+            self._remove_upload_directory(job_id)
 
     def _remove_upload_directory(self, job_id: str) -> None:
         upload_directory = (self.jobs_directory / job_id).resolve()

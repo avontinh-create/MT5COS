@@ -14,3 +14,4 @@ pillow
 SQLAlchemy
 psycopg[binary]
 cryptography
+alembic

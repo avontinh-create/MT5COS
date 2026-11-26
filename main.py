@@ -24,6 +24,7 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Query,
     Request,
     UploadFile,
 )
@@ -42,6 +43,7 @@ from app.services.auth_store import (
     send_account_email,
 )
 from app.services.database import Database
+from app.services.rate_limiter import SharedRateLimiter
 from app.services.mt5_engine.runner import MT5BacktestRunner
 
 
@@ -87,15 +89,30 @@ class OptimizationRateLimiter:
 
 load_dotenv(PROJECT_ROOT / ".env")
 app = FastAPI(title="MT5 AI Optimizer API")
-optimization_rate_limiter = OptimizationRateLimiter(
-    MAX_OPTIMIZATIONS_PER_MINUTE_PER_IP,
-    OPTIMIZATION_RATE_WINDOW_SECONDS,
+database_url = os.getenv("DATABASE_URL", str(JOB_DATABASE_PATH))
+database_is_postgresql = database_url.startswith(
+    ("postgresql://", "postgresql+psycopg://")
 )
-auth_rate_limiter = OptimizationRateLimiter(10, 15 * 60)
-signup_rate_limiter = OptimizationRateLimiter(5, 60 * 60)
-recovery_rate_limiter = OptimizationRateLimiter(5, 60 * 60)
-database = Database(os.getenv("DATABASE_URL", str(JOB_DATABASE_PATH)))
+database = Database(
+    database_url,
+    initialize_schema=not database_is_postgresql,
+)
 auth_store = AuthStore(database)
+optimization_rate_limiter = SharedRateLimiter(
+    database.engine,
+    scope="optimization",
+    limit=MAX_OPTIMIZATIONS_PER_MINUTE_PER_IP,
+    window_seconds=OPTIMIZATION_RATE_WINDOW_SECONDS,
+)
+auth_rate_limiter = SharedRateLimiter(
+    database.engine, scope="login", limit=10, window_seconds=15 * 60
+)
+signup_rate_limiter = SharedRateLimiter(
+    database.engine, scope="signup", limit=5, window_seconds=60 * 60
+)
+recovery_rate_limiter = SharedRateLimiter(
+    database.engine, scope="recovery", limit=5, window_seconds=60 * 60
+)
 job_manager = OptimizationJobManager(
     JobStore(database),
     JOBS_DIR,
@@ -639,6 +656,7 @@ def _execute_optimization_job(
         leverage=config["leverage"],
         model=config["model"],
         execution_mode=config["execution_mode"],
+        execution_delay_ms=config.get("execution_delay_ms", 0),
         progress_callback=progress_callback,
     )
     best_set_name = Path(result["best_set_file"]).name
@@ -823,7 +841,8 @@ def optimize_uploaded_set(
     currency: str = Form("USD", min_length=3, max_length=3),
     leverage: int = Form(100, ge=1, le=10000),
     model: int = Form(1, ge=0, le=4),
-    execution_mode: int = Form(0, ge=0, le=1),
+    execution_mode: int = Form(0, ge=0, le=2),
+    execution_delay_ms: int = Form(0, ge=0, le=100),
 ):
     user_id = _request_user_id(request)
     if not file.filename or Path(file.filename).suffix.lower() != ".set":
@@ -873,6 +892,14 @@ def optimize_uploaded_set(
             status_code=422,
             detail=(
                 "MQL5 Random Delay cannot be used with Open prices only. "
+                "Choose No Delay or another tick model."
+            ),
+        )
+    if execution_mode == 2 and model == 2:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Execution delays cannot be used with Open prices only. "
                 "Choose No Delay or another tick model."
             ),
         )
@@ -976,6 +1003,7 @@ def optimize_uploaded_set(
             "leverage": leverage,
             "model": model,
             "execution_mode": execution_mode,
+            "execution_delay_ms": execution_delay_ms,
         }
         job_manager.submit(job_id, config, n_trials, user_id)
     except (FileNotFoundError, ValueError) as exc:
@@ -992,6 +1020,51 @@ def optimize_uploaded_set(
         "job_id": job_id,
         "status": "queued",
         "status_url": f"/jobs/{job_id}",
+    }
+
+
+@app.get("/jobs")
+def list_optimization_jobs(
+    request: Request,
+    limit: int = Query(20, ge=1, le=50),
+    offset: int = Query(0, ge=0),
+):
+    user_id = _request_user_id(request)
+    jobs = job_manager.list_recent(user_id, limit=limit + 1, offset=offset)
+    has_more = len(jobs) > limit
+    jobs = jobs[:limit]
+    return {
+        "jobs": [
+            {
+                "job_id": job["job_id"],
+                "job_type": (
+                    "connection_check"
+                    if job["config"].get("job_type") == "connection_check"
+                    else "optimization"
+                ),
+                "status": job["status"],
+                "created_at": job["created_at"],
+                "completed_trials": job["completed_trials"],
+                "total_trials": job["total_trials"],
+                "best_value": job["best_value"],
+                "error": job["error"],
+                "result": (
+                    {
+                        "best_set_file": job["result"].get("best_set_file"),
+                        "excel_reports": [
+                            {"filename": report["filename"]}
+                            for report in job["result"].get("excel_reports", [])
+                        ],
+                    }
+                    if job["result"]
+                    else None
+                ),
+            }
+            for job in jobs
+        ],
+        "limit": limit,
+        "offset": offset,
+        "has_more": has_more,
     }
 
 

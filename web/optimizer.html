@@ -40,6 +40,18 @@
       font-size: 28px;
       letter-spacing: -.5px;
     }
+    .topbar {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+    }
+    .language-switch {
+      flex: 0 0 auto;
+      width: 150px;
+      color: #d3e2f1;
+    }
+    .language-switch select { min-height: 38px; }
     p { color: #a9bbce; line-height: 1.6; }
     fieldset {
       margin: 26px 0;
@@ -158,6 +170,23 @@
     #system-status h2 { margin: 0; font-size: 17px; color: #f0f7ff; }
     #system-status p { margin: 0; font-size: 13px; overflow-wrap: anywhere; }
     #system-status button { max-width: 260px; }
+    #job-history {
+      display: grid;
+      gap: 12px;
+      margin: 20px 0;
+      padding: 18px;
+      background: #102840;
+      border: 1px solid #2a4661;
+      border-radius: 12px;
+    }
+    #job-history h2 { margin: 0; font-size: 17px; color: #f0f7ff; }
+    #job-history-list { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+    .history-item { padding: 12px; background: #142a41; border: 1px solid #36536d; border-radius: 8px; }
+    .history-item p { margin: 6px 0 0; font-size: 13px; }
+    .history-heading { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; }
+    .history-status { color: #75f1e7; font-size: 13px; }
+    .history-item a { display: inline-block; margin: 8px 12px 0 0; color: #ff91c4; }
+    #job-history-message { margin: 0; font-size: 13px; }
     #account-panel {
       display: grid;
       gap: 16px;
@@ -184,84 +213,101 @@
 </head>
 <body>
 <main>
-  <h1>MT5 AI Optimizer</h1>
-  <p>Đăng nhập tài khoản của bạn trước. Thông tin MT5 được lưu mã hóa theo từng tài khoản; tên symbol trong CurrencyList sẽ tự khớp với broker.</p>
+  <div class="topbar">
+    <h1>MT5 AI Optimizer</h1>
+    <label class="language-switch">
+      <span data-i18n="language">Ngôn ngữ</span>
+      <select id="language-select" aria-label="Language" data-i18n-aria-label="language">
+        <option value="vi">Tiếng Việt</option>
+        <option value="en">English</option>
+        <option value="ko">한국어</option>
+        <option value="ja">日本語</option>
+        <option value="th">ไทย</option>
+      </select>
+    </label>
+  </div>
+  <p data-i18n="intro">Đăng nhập tài khoản của bạn trước. Thông tin MT5 được lưu mã hóa theo từng tài khoản; tên symbol trong CurrencyList sẽ tự khớp với broker.</p>
   <section id="account-panel" aria-live="polite">
-    <h2>Tài khoản</h2>
-    <p id="account-message">Đang kiểm tra phiên đăng nhập...</p>
+    <h2 data-i18n="account">Tài khoản</h2>
+    <p id="account-message" data-i18n="checking-session">Đang kiểm tra phiên đăng nhập...</p>
     <form id="account-form">
       <div class="grid">
-        <label>Email
+        <label><span data-i18n="email">Email</span>
           <input id="account-email" type="email" autocomplete="username" required>
         </label>
-        <label>Mật khẩu
+        <label><span data-i18n="password">Mật khẩu</span>
           <input id="account-password" type="password" minlength="12" maxlength="1024" autocomplete="current-password" required>
         </label>
       </div>
       <div id="account-buttons">
-        <button id="login-button" type="submit">Đăng nhập</button>
-        <button id="register-button" type="button">Đăng ký</button>
-        <button id="recovery-button" type="button">Quên mật khẩu</button>
-        <button id="account-login-switch" type="button" hidden>Đăng nhập tài khoản riêng</button>
-        <button id="logout-button" type="button" hidden>Đăng xuất</button>
+        <button id="login-button" type="submit" data-i18n="login">Đăng nhập</button>
+        <button id="register-button" type="button" data-i18n="register">Đăng ký</button>
+        <button id="recovery-button" type="button" data-i18n="forgot-password">Quên mật khẩu</button>
+        <button id="account-login-switch" type="button" hidden data-i18n="private-login">Đăng nhập tài khoản riêng</button>
+        <button id="logout-button" type="button" hidden data-i18n="logout">Đăng xuất</button>
       </div>
     </form>
     <form id="credential-form" hidden>
-      <h2>Kết nối tài khoản MT5</h2>
+      <h2 data-i18n="connect-mt5">Kết nối tài khoản MT5</h2>
       <div class="grid">
-        <label>MT5 login
+        <label><span>MT5 login</span>
           <input name="login" inputmode="numeric" autocomplete="off" required>
         </label>
-        <label>MT5 server
+        <label><span>MT5 server</span>
           <input name="server" autocomplete="off" required>
         </label>
-        <label>Mật khẩu MT5
+        <label><span data-i18n="mt5-password">Mật khẩu MT5</span>
           <input name="password" type="password" autocomplete="new-password" required>
         </label>
       </div>
-      <button type="submit">Lưu thông tin MT5 mã hóa</button>
+      <button type="submit" data-i18n="save-mt5">Lưu thông tin MT5 mã hóa</button>
     </form>
   </section>
   <section id="system-status" aria-live="polite" hidden>
-    <h2>Trạng thái MT5</h2>
-    <p id="system-status-details">Đang kiểm tra cấu hình máy chủ...</p>
-    <p id="terminal-build-status">Build terminal: chưa kiểm tra kết nối.</p>
+    <h2 data-i18n="mt5-status">Trạng thái MT5</h2>
+    <p id="system-status-details" data-i18n="checking-server">Đang kiểm tra cấu hình máy chủ...</p>
+    <p id="terminal-build-status" data-i18n="terminal-not-checked">Build terminal: chưa kiểm tra kết nối.</p>
     <p id="latest-job-status"></p>
-    <button id="connection-check-button" type="button">Kiểm tra kết nối broker</button>
+    <button id="connection-check-button" type="button" data-i18n="check-broker">Kiểm tra kết nối broker</button>
     <p id="connection-status"></p>
-    <span class="help">Kiểm tra sẽ tạm khởi chạy terminal MT5 và đóng phiên kiểm tra sau đó; không đặt lệnh giao dịch. Hãy đóng MT5 portable trước khi kiểm tra.</span>
+    <span class="help" data-i18n="broker-help">Kiểm tra sẽ tạm khởi chạy terminal MT5 và đóng phiên kiểm tra sau đó; không đặt lệnh giao dịch. Hãy đóng MT5 portable trước khi kiểm tra.</span>
+  </section>
+  <section id="job-history" aria-live="polite" hidden>
+    <h2 data-i18n="job-history">Lịch sử tối ưu</h2>
+    <p id="job-history-message"></p>
+    <ol id="job-history-list"></ol>
   </section>
   <form id="optimizer-form" hidden>
     <fieldset>
-      <legend>EA và dữ liệu tối ưu</legend>
+      <legend data-i18n="ea-data">EA và dữ liệu tối ưu</legend>
       <div class="grid">
-        <label>File tham số EA (.set)
+        <label><span data-i18n="ea-set">File tham số EA (.set)</span>
           <input name="file" type="file" accept=".set" required>
         </label>
-        <label>File phạm vi tối ưu (.set), nếu có
+        <label><span data-i18n="range-set">File phạm vi tối ưu (.set), nếu có</span>
           <input name="optimization_file" type="file" accept=".set">
-          <span class="help">Nếu file tham số EA chưa bật tham số số nào để tối ưu, hãy tải file phạm vi tương ứng (ví dụ optimization_ranges.set). Không chọn file phạm vi của EA khác.</span>
+          <span class="help" data-i18n="range-help">Nếu file tham số EA chưa bật tham số số nào để tối ưu, hãy tải file phạm vi tương ứng (ví dụ optimization_ranges.set). Không chọn file phạm vi của EA khác.</span>
         </label>
-        <label>Tên EA (.ex5)
-          <input name="expert_name" value="" placeholder="Ví dụ: Peak.ex5" required>
-          <span class="help">Nhập tên EA .ex5 đã được build sẵn trong MQL5\Experts. Web hiện không build mã nguồn .mq5 và không hiển thị lỗi MetaEditor.</span>
+        <label><span data-i18n="ea-name">Tên EA (.ex5)</span>
+          <input name="expert_name" value="" placeholder="Ví dụ: Peak.ex5" data-i18n-placeholder="ea-placeholder" required>
+          <span class="help" data-i18n="ea-help">Nhập tên EA .ex5 đã được build sẵn trong MQL5\Experts. Web hiện không build mã nguồn .mq5 và không hiển thị lỗi MetaEditor.</span>
         </label>
-        <label>Symbol
+        <label><span>Symbol</span>
           <input name="symbol" value="EURUSD" required>
         </label>
-        <label>Khung thời gian
+        <label><span data-i18n="timeframe">Khung thời gian</span>
           <select name="period">
             <option>M1</option><option>M5</option><option>M15</option><option>M30</option>
             <option selected>H1</option><option>H4</option><option>D1</option><option>W1</option><option>MN1</option>
           </select>
         </label>
-        <label>Số lượt tối ưu
+        <label><span data-i18n="trials">Số lượt tối ưu</span>
           <input name="n_trials" type="number" min="1" max="100" value="10" required>
         </label>
-        <label>Từ ngày (YYYY.MM.DD)
+        <label><span data-i18n="from-date">Từ ngày (YYYY.MM.DD)</span>
           <input name="from_date" value="2023.01.01" pattern="\d{4}\.\d{2}\.\d{2}" required>
         </label>
-        <label>Đến ngày (YYYY.MM.DD)
+        <label><span data-i18n="to-date">Đến ngày (YYYY.MM.DD)</span>
           <input name="to_date" value="2023.12.31" pattern="\d{4}\.\d{2}\.\d{2}" required>
         </label>
       </div>
@@ -269,45 +315,411 @@
     <fieldset>
       <legend>Strategy Tester</legend>
       <div class="grid">
-        <label>Tiền nạp ban đầu
+        <label><span data-i18n="deposit">Tiền nạp ban đầu</span>
           <input name="deposit" type="number" min="0.01" step="any" value="10000" required>
         </label>
-        <label>Đồng tiền tài khoản
+        <label><span data-i18n="currency">Đồng tiền tài khoản</span>
           <input name="currency" value="USD" minlength="3" maxlength="3" pattern="[A-Za-z]{3}" required>
         </label>
-        <label>Đòn bẩy (ví dụ 100 = 1:100)
+        <label><span data-i18n="leverage">Đòn bẩy (ví dụ 100 = 1:100)</span>
           <input name="leverage" type="number" min="1" max="10000" step="1" value="100" required>
         </label>
-        <label>Mô hình giá
+        <label><span data-i18n="price-model">Mô hình giá</span>
           <select name="model">
-            <option value="0">Every tick</option>
-            <option value="1" selected>1 minute OHLC</option>
-            <option value="2">Open prices only</option>
-            <option value="4">Every tick based on real ticks</option>
+            <option value="0" data-i18n="every-tick">Every tick</option>
+            <option value="1" selected data-i18n="one-minute-ohlc">1 minute OHLC</option>
+            <option value="2" data-i18n="open-prices">Open prices only</option>
+            <option value="4" data-i18n="real-ticks">Every tick based on real ticks</option>
           </select>
         </label>
-        <label>Độ trễ khớp lệnh
-          <select name="execution_mode">
-            <option value="0" selected>Zero latency, ideal execution</option>
-            <option value="1">Random delay (MQL5)</option>
+        <label><span data-i18n="execution-delay">Độ trễ khớp lệnh</span>
+          <select name="execution_mode" id="execution-mode">
+            <option value="0" selected data-i18n="zero-latency">Zero latency, ideal execution</option>
+            <option value="1" data-i18n="random-delay">Random delay (MQL5)</option>
+            <option value="2" data-i18n="fixed-delay-mode">Fixed delay</option>
           </select>
-          <span id="execution-help" class="help">Theo MQL5: 90% lượt trễ từ 0 đến 8 giây; 10% lượt trễ từ 9 đến 18 giây. Không dùng được với mô hình Open prices only. <a href="https://www.metatrader5.com/en/terminal/help/algotrading/testing#trade_mode" target="_blank" rel="noopener noreferrer">Tài liệu MQL5</a></span>
         </label>
+        <label id="fixed-delay-fields" hidden>
+          <span data-i18n="fixed-delay">Độ trễ cố định (ms)</span>
+          <select id="execution-delay-preset">
+            <option value="0">0 ms</option>
+            <option value="5">5 ms</option>
+            <option value="10">10 ms</option>
+            <option value="50">50 ms</option>
+            <option value="100">100 ms</option>
+            <option value="custom" data-i18n="custom-delay">Tự nhập</option>
+          </select>
+          <input id="execution-delay-custom" type="number" min="0" max="100" step="1" value="0" data-i18n-placeholder="custom-delay-placeholder" hidden disabled>
+          <input id="execution-delay-value" type="hidden" name="execution_delay_ms" value="0">
+          <span class="help" data-i18n="fixed-delay-help">Chọn từ 0 đến 100 ms. Giá trị tự nhập là số nguyên trong khoảng này.</span>
+        </label>
+        <span id="execution-help" class="help"><span data-i18n="execution-help">Theo MQL5: 90% lượt trễ từ 0 đến 8 giây; 10% lượt trễ từ 9 đến 18 giây. Không dùng được với mô hình Open prices only.</span> <a href="https://www.metatrader5.com/en/terminal/help/algotrading/testing#trade_mode" target="_blank" rel="noopener noreferrer" data-i18n="mql5-docs">Tài liệu MQL5</a></span>
       </div>
     </fieldset>
-    <p class="help">MT5 optimization được giữ ở Disabled vì AI Optimizer tự tạo từng lượt thử. Chế độ Math calculations không dùng được để chấm điểm hiệu suất tài chính.</p>
-    <p class="help">Giới hạn tải: tối đa 100 lượt/job, 5 job chờ trong hàng đợi và 3 yêu cầu tối ưu/phút cho mỗi IP. Khi chạm giới hạn, hãy chờ job hoặc thời gian giới hạn kết thúc rồi thử lại.</p>
-    <button id="submit-button" type="submit">Bắt đầu tối ưu</button>
+    <p class="help" data-i18n="optimizer-note">MT5 optimization được giữ ở Disabled vì AI Optimizer tự tạo từng lượt thử. Chế độ Math calculations không dùng được để chấm điểm hiệu suất tài chính.</p>
+    <p class="help" data-i18n="limits-note">Giới hạn tải: tối đa 100 lượt/job, 5 job chờ trong hàng đợi và 3 yêu cầu tối ưu/phút cho mỗi IP. Khi chạm giới hạn, hãy chờ job hoặc thời gian giới hạn kết thúc rồi thử lại.</p>
+    <button id="submit-button" type="submit" data-i18n="start-optimization">Bắt đầu tối ưu</button>
   </form>
   <section id="status" aria-live="polite" hidden></section>
 </main>
 <script>
-  const form = document.getElementById("optimizer-form");
+    const messages = {
+      vi: {
+        language: "Ngôn ngữ", intro: "Đăng nhập tài khoản của bạn trước. Thông tin MT5 được lưu mã hóa theo từng tài khoản; tên symbol trong CurrencyList sẽ tự khớp với broker.",
+        account: "Tài khoản", "checking-session": "Đang kiểm tra phiên đăng nhập...", email: "Email", password: "Mật khẩu", login: "Đăng nhập",
+        register: "Đăng ký", "forgot-password": "Quên mật khẩu", "private-login": "Đăng nhập tài khoản riêng", logout: "Đăng xuất",
+        "connect-mt5": "Kết nối tài khoản MT5", "mt5-password": "Mật khẩu MT5", "save-mt5": "Lưu thông tin MT5 mã hóa",
+        "mt5-status": "Trạng thái MT5", "checking-server": "Đang kiểm tra cấu hình máy chủ...", "terminal-not-checked": "Build terminal: chưa kiểm tra kết nối.",
+        "check-broker": "Kiểm tra kết nối broker", "broker-help": "Kiểm tra sẽ tạm khởi chạy terminal MT5 và đóng phiên kiểm tra sau đó; không đặt lệnh giao dịch. Hãy đóng MT5 portable trước khi kiểm tra.",
+        "ea-data": "EA và dữ liệu tối ưu", "ea-set": "File tham số EA (.set)", "range-set": "File phạm vi tối ưu (.set), nếu có",
+        "range-help": "Nếu file tham số EA chưa bật tham số số nào để tối ưu, hãy tải file phạm vi tương ứng (ví dụ optimization_ranges.set). Không chọn file phạm vi của EA khác.",
+        "ea-name": "Tên EA (.ex5)", "ea-placeholder": "Ví dụ: Peak.ex5", "ea-help": "Nhập tên EA .ex5 đã được build sẵn trong MQL5\\Experts. Web hiện không build mã nguồn .mq5 và không hiển thị lỗi MetaEditor.",
+        timeframe: "Khung thời gian", trials: "Số lượt tối ưu", "from-date": "Từ ngày (YYYY.MM.DD)", "to-date": "Đến ngày (YYYY.MM.DD)",
+        deposit: "Tiền nạp ban đầu", currency: "Đồng tiền tài khoản", leverage: "Đòn bẩy (ví dụ 100 = 1:100)", "price-model": "Mô hình giá",
+        "every-tick": "Every tick", "one-minute-ohlc": "1 minute OHLC", "open-prices": "Open prices only",
+        "real-ticks": "Every tick based on real ticks", "execution-delay": "Độ trễ khớp lệnh",
+        "zero-latency": "Zero latency, ideal execution", "random-delay": "Random delay (MQL5)",
+        "fixed-delay-mode": "Fixed delay", "fixed-delay": "Độ trễ cố định (ms)",
+        "custom-delay": "Tự nhập", "custom-delay-placeholder": "Nhập 0–100 ms",
+        "fixed-delay-help": "Chọn từ 0 đến 100 ms. Giá trị tự nhập là số nguyên trong khoảng này.",
+        "execution-help": "Theo MQL5: 90% lượt trễ từ 0 đến 8 giây; 10% lượt trễ từ 9 đến 18 giây. Không dùng được với mô hình Open prices only.",
+        "mql5-docs": "Tài liệu MQL5", "optimizer-note": "MT5 optimization được giữ ở Disabled vì AI Optimizer tự tạo từng lượt thử. Chế độ Math calculations không dùng được để chấm điểm hiệu suất tài chính.",
+        "limits-note": "Giới hạn tải: tối đa 100 lượt/job, 5 job chờ trong hàng đợi và 3 yêu cầu tối ưu/phút cho mỗi IP. Khi chạm giới hạn, hãy chờ job hoặc thời gian giới hạn kết thúc rồi thử lại.",
+        "start-optimization": "Bắt đầu tối ưu", "private-auth-mode": "Đang dùng chế độ local/Basic Auth cũ.",
+        "account-login": "Đang đăng nhập: {email}", "reset-prompt": "Nhập mật khẩu mới để hoàn tất khôi phục.",
+        "verification-failed": "Không thể xác minh email. Hãy thử lại.", "registration-config-failed": "Không thể đọc cấu hình đăng ký.",
+        "session-check-failed": "Không thể kiểm tra phiên đăng nhập.", "sending-recovery": "Đang yêu cầu khôi phục...",
+        "resetting-password": "Đang đổi mật khẩu...", "signing-in": "Đang đăng nhập...", "login-failed": "Không thành công: {error}",
+        "recovery-prompt": "Nhập email đã xác minh. Nếu tài khoản tồn tại, liên kết khôi phục sẽ được gửi.",
+        "personal-login-prompt": "Đăng nhập bằng tài khoản cá nhân của bạn.", "sending-registration": "Đang gửi yêu cầu đăng ký...",
+        "registration-failed": "Đăng ký thất bại: {error}", "logout-failed": "Không thể kết thúc phiên đăng nhập.",
+        "logged-out": "Bạn đã đăng xuất.", "saving-mt5": "Đang lưu thông tin MT5 mã hóa...",
+        "mt5-saved": "Thông tin MT5 đã được lưu mã hóa.", "save-mt5-failed": "Lưu MT5 thất bại: {error}",
+        "random-delay-incompatible": "Chế độ độ trễ không dùng được với mô hình Open prices only.",
+        "job-read-failed": "Không thể đọc trạng thái job.", "job-failed": "Job kết thúc với trạng thái {status}.",
+        "web-api": "Web API", "mt5-library": "Thư viện MT5", "account-info": "Thông tin tài khoản", terminal: "Terminal MT5",
+        expert: "EA", broker: "Kết nối broker", ready: "sẵn sàng", missing: "thiếu", configured: "đã cấu hình",
+        available: "có sẵn", "not-configured": "chưa cấu hình", "not-checked": "chưa kiểm tra",
+        "encryption-key-missing": "thiếu khóa giải mã MT5", "queue-count": "Hàng đợi: {queued}/{maximum} job chờ",
+        "running-count": "Đang chạy: {count}", "terminal-build": "Build terminal MT5: {build}",
+        "no-jobs": "Chưa có job nào được chạy.", "job-history": "Lịch sử tối ưu gần đây",
+        "history-empty": "Chưa có lượt chạy nào.", "history-load-failed": "Không thể tải lịch sử: {error}",
+        "history-progress": "Tiến độ: {completed}/{total} lượt", "history-score": "Điểm tốt nhất: {score}",
+        "history-error": "Lỗi: {error}", "status-queued": "Đang chờ", "status-running": "Đang chạy",
+        "status-completed": "Hoàn tất", "status-failed": "Thất bại",
+        "history-optimization": "Tối ưu hóa", "history-connection": "Kiểm tra kết nối",
+        "latest-failed": "Job gần nhất lỗi ({progress} lượt): {error}",
+        "latest-job": "Job gần nhất: {status} ({progress} lượt).", "status-check-failed": "Không thể kiểm tra cấu hình: {error}",
+        "system-status-summary": "{summary}",
+        "queue-connection-check": "Đang xếp hàng kiểm tra kết nối...", "connection-check-start-failed": "Không thể bắt đầu kiểm tra kết nối.",
+        "waiting-mt5": "Đang chờ MT5: vị trí {position}/{queued}...", "connecting-broker": "Đang kết nối tới broker...",
+        "connected-broker": "Đã kết nối broker {server}.", "connected-broker-currency": "Đã kết nối broker {server} · tiền tệ {currency}.",
+        "connection-check-failed": "Kiểm tra thất bại: {error}", "queue-optimization": "Đang đưa yêu cầu vào hàng đợi...",
+        "optimization-failed": "Không thể chạy tối ưu.", "queue-job": "Job đang chờ: vị trí {position}/{queued} · Hàng đợi tối đa {maximum} job.",
+        "running-tester": "Đang chạy Strategy Tester: {progress} lượt · Best score: {score}",
+        "running-tester-no-score": "Đang chạy Strategy Tester: {progress} lượt",
+        "complete-job": "Hoàn tất {progress} lượt. Best score: {score}", "download-set": "Tải file .set tốt nhất: {filename}",
+        "download-excel": "Tải Excel: {filename}", "error-prefix": "Lỗi: {error}",
+        "send-reset": "Gửi liên kết đặt lại", "reset-password": "Đặt lại mật khẩu"
+      },
+      en: {
+        language: "Language", intro: "Sign in first. MT5 credentials are encrypted per account, and symbols in CurrencyList are matched to your broker automatically.",
+        account: "Account", "checking-session": "Checking sign-in session...", email: "Email", password: "Password", login: "Sign in",
+        register: "Register", "forgot-password": "Forgot password", "private-login": "Sign in to personal account", logout: "Sign out",
+        "connect-mt5": "Connect MT5 account", "mt5-password": "MT5 password", "save-mt5": "Save encrypted MT5 credentials",
+        "mt5-status": "MT5 status", "checking-server": "Checking server configuration...", "terminal-not-checked": "Terminal build: connection not checked.",
+        "check-broker": "Check broker connection", "broker-help": "This check briefly starts the MT5 terminal and closes it afterward; it does not place trades. Close the portable MT5 terminal before checking.",
+        "ea-data": "EA and optimization data", "ea-set": "EA parameter file (.set)", "range-set": "Optimization range file (.set), if any",
+        "range-help": "If the EA parameter file has no numeric parameters enabled for optimization, upload its matching range file (for example, optimization_ranges.set). Do not use a range file for another EA.",
+        "ea-name": "EA name (.ex5)", "ea-placeholder": "For example: Peak.ex5", "ea-help": "Enter the name of a built .ex5 EA under MQL5\\Experts. The web app does not build .mq5 source or display MetaEditor errors.",
+        timeframe: "Timeframe", trials: "Optimization trials", "from-date": "From date (YYYY.MM.DD)", "to-date": "To date (YYYY.MM.DD)",
+        deposit: "Initial deposit", currency: "Account currency", leverage: "Leverage (e.g. 100 = 1:100)", "price-model": "Price model",
+        "every-tick": "Every tick", "one-minute-ohlc": "1 minute OHLC", "open-prices": "Open prices only",
+        "real-ticks": "Every tick based on real ticks", "execution-delay": "Execution delay",
+        "zero-latency": "Zero latency, ideal execution", "random-delay": "Random delay (MQL5)",
+        "fixed-delay-mode": "Fixed delay", "fixed-delay": "Fixed delay (ms)",
+        "custom-delay": "Custom", "custom-delay-placeholder": "Enter 0–100 ms",
+        "fixed-delay-help": "Choose 0 to 100 ms. Custom values must be whole numbers in this range.",
+        "execution-help": "MQL5: 90% of delays are 0–8 seconds; 10% are 9–18 seconds. Not available with the Open prices only model.",
+        "mql5-docs": "MQL5 documentation", "optimizer-note": "MT5 optimization remains Disabled because AI Optimizer creates each trial. Math calculations cannot be used to score financial performance.",
+        "limits-note": "Limits: 100 trials per job, 5 queued jobs, and 3 optimization requests per IP per minute. If a limit is reached, wait for a job or the limit window to finish and try again.",
+        "start-optimization": "Start optimization", "private-auth-mode": "Using local/legacy Basic Auth mode.",
+        "account-login": "Signed in as: {email}", "reset-prompt": "Enter a new password to complete recovery.",
+        "verification-failed": "Could not verify email. Please try again.", "registration-config-failed": "Could not read registration settings.",
+        "session-check-failed": "Could not check the sign-in session.", "sending-recovery": "Requesting account recovery...",
+        "resetting-password": "Resetting password...", "signing-in": "Signing in...", "login-failed": "Request failed: {error}",
+        "recovery-prompt": "Enter your verified email. If the account exists, a recovery link will be sent.",
+        "personal-login-prompt": "Sign in with your personal account.", "sending-registration": "Submitting registration...",
+        "registration-failed": "Registration failed: {error}", "logout-failed": "Could not end the sign-in session.",
+        "logged-out": "You have signed out.", "saving-mt5": "Saving encrypted MT5 credentials...",
+        "mt5-saved": "MT5 credentials have been saved encrypted.", "save-mt5-failed": "Could not save MT5 credentials: {error}",
+        "random-delay-incompatible": "Execution delay modes are not available with the Open prices only model.",
+        "job-read-failed": "Could not read job status.", "job-failed": "Job ended with status {status}.",
+        "web-api": "Web API", "mt5-library": "MT5 library", "account-info": "Account information", terminal: "MT5 terminal",
+        expert: "EA", broker: "Broker connection", ready: "ready", missing: "missing", configured: "configured",
+        available: "available", "not-configured": "not configured", "not-checked": "not checked",
+        "encryption-key-missing": "MT5 encryption key missing", "queue-count": "Queue: {queued}/{maximum} waiting",
+        "running-count": "Running: {count}", "terminal-build": "MT5 terminal build: {build}",
+        "no-jobs": "No jobs have run yet.", "job-history": "Recent job history",
+        "history-empty": "No jobs have run yet.", "history-load-failed": "Could not load history: {error}",
+        "history-progress": "Progress: {completed}/{total} trials", "history-score": "Best score: {score}",
+        "history-error": "Error: {error}", "status-queued": "Queued", "status-running": "Running",
+        "status-completed": "Completed", "status-failed": "Failed",
+        "history-optimization": "Optimization", "history-connection": "Connection check",
+        "latest-failed": "Latest job failed ({progress} trials): {error}",
+        "latest-job": "Latest job: {status} ({progress} trials).", "status-check-failed": "Could not check configuration: {error}",
+        "system-status-summary": "{summary}",
+        "queue-connection-check": "Queueing connection check...", "connection-check-start-failed": "Could not start connection check.",
+        "waiting-mt5": "Waiting for MT5: position {position}/{queued}...", "connecting-broker": "Connecting to broker...",
+        "connected-broker": "Connected to broker {server}.", "connected-broker-currency": "Connected to broker {server} · currency {currency}.",
+        "connection-check-failed": "Connection check failed: {error}", "queue-optimization": "Adding request to the queue...",
+        "optimization-failed": "Could not run optimization.", "queue-job": "Job queued: position {position}/{queued} · Maximum queue size: {maximum}.",
+        "running-tester": "Strategy Tester running: {progress} trials · Best score: {score}",
+        "running-tester-no-score": "Strategy Tester running: {progress} trials",
+        "complete-job": "Completed {progress} trials. Best score: {score}", "download-set": "Download best .set file: {filename}",
+        "download-excel": "Download Excel: {filename}", "error-prefix": "Error: {error}",
+        "send-reset": "Send reset link", "reset-password": "Reset password"
+      },
+      ko: {
+        language: "언어", intro: "먼저 로그인하세요. MT5 정보는 계정별로 암호화되어 저장되며 CurrencyList의 심볼은 브로커에 자동으로 맞춰집니다.",
+        account: "계정", "checking-session": "로그인 세션 확인 중...", email: "이메일", password: "비밀번호", login: "로그인",
+        register: "회원가입", "forgot-password": "비밀번호 찾기", "private-login": "개인 계정으로 로그인", logout: "로그아웃",
+        "connect-mt5": "MT5 계정 연결", "mt5-password": "MT5 비밀번호", "save-mt5": "암호화된 MT5 정보 저장",
+        "mt5-status": "MT5 상태", "checking-server": "서버 설정 확인 중...", "terminal-not-checked": "터미널 빌드: 연결 확인 전",
+        "check-broker": "브로커 연결 확인", "broker-help": "확인 중 MT5 터미널이 잠시 실행된 후 종료됩니다. 거래 주문은 하지 않습니다. 확인 전에 portable MT5를 종료하세요.",
+        "ea-data": "EA 및 최적화 데이터", "ea-set": "EA 매개변수 파일 (.set)", "range-set": "최적화 범위 파일 (.set, 선택)",
+        "range-help": "EA 매개변수 파일에 최적화가 활성화된 숫자 매개변수가 없으면 해당 범위 파일(예: optimization_ranges.set)을 업로드하세요. 다른 EA의 범위 파일은 사용하지 마세요.",
+        "ea-name": "EA 이름 (.ex5)", "ea-placeholder": "예: Peak.ex5", "ea-help": "MQL5\\Experts에 빌드된 .ex5 EA 이름을 입력하세요. 웹 앱은 .mq5 소스를 빌드하거나 MetaEditor 오류를 표시하지 않습니다.",
+        timeframe: "시간 프레임", trials: "최적화 반복 횟수", "from-date": "시작 날짜 (YYYY.MM.DD)", "to-date": "종료 날짜 (YYYY.MM.DD)",
+        deposit: "초기 예치금", currency: "계정 통화", leverage: "레버리지 (예: 100 = 1:100)", "price-model": "가격 모델",
+        "every-tick": "모든 틱", "one-minute-ohlc": "1분 OHLC", "open-prices": "시가만 사용",
+        "real-ticks": "실제 틱 기반 모든 틱", "execution-delay": "체결 지연",
+        "zero-latency": "지연 없음, 이상적인 체결", "random-delay": "무작위 지연 (MQL5)",
+        "fixed-delay-mode": "고정 지연", "fixed-delay": "고정 지연 (ms)",
+        "custom-delay": "직접 입력", "custom-delay-placeholder": "0~100 ms 입력",
+        "fixed-delay-help": "0~100ms를 선택하세요. 직접 입력은 이 범위의 정수여야 합니다.",
+        "execution-help": "MQL5 기준: 지연의 90%는 0~8초, 10%는 9~18초입니다. 시가만 사용 모델에서는 지원되지 않습니다.",
+        "mql5-docs": "MQL5 문서", "optimizer-note": "AI Optimizer가 각 테스트를 생성하므로 MT5 최적화는 Disabled로 유지됩니다. Math calculations는 금융 성과 평가에 사용할 수 없습니다.",
+        "limits-note": "제한: 작업당 최대 100회, 대기열 최대 5개, IP당 분당 최적화 요청 3회입니다. 제한에 도달하면 작업 또는 제한 시간이 끝난 뒤 다시 시도하세요.",
+        "start-optimization": "최적화 시작", "private-auth-mode": "로컬/기존 Basic Auth 모드 사용 중입니다.",
+        "account-login": "로그인 계정: {email}", "reset-prompt": "복구를 완료하려면 새 비밀번호를 입력하세요.",
+        "verification-failed": "이메일을 확인할 수 없습니다. 다시 시도하세요.", "registration-config-failed": "가입 설정을 읽을 수 없습니다.",
+        "session-check-failed": "로그인 세션을 확인할 수 없습니다.", "sending-recovery": "계정 복구 요청 중...",
+        "resetting-password": "비밀번호 변경 중...", "signing-in": "로그인 중...", "login-failed": "요청 실패: {error}",
+        "recovery-prompt": "인증된 이메일을 입력하세요. 계정이 있으면 복구 링크가 전송됩니다.",
+        "personal-login-prompt": "개인 계정으로 로그인하세요.", "sending-registration": "가입 요청 전송 중...",
+        "registration-failed": "가입 실패: {error}", "logout-failed": "로그인 세션을 종료할 수 없습니다.",
+        "logged-out": "로그아웃되었습니다.", "saving-mt5": "암호화된 MT5 정보 저장 중...",
+        "mt5-saved": "MT5 정보가 암호화되어 저장되었습니다.", "save-mt5-failed": "MT5 정보를 저장할 수 없습니다: {error}",
+        "random-delay-incompatible": "시가만 사용 모델에서는 체결 지연을 사용할 수 없습니다.",
+        "job-read-failed": "작업 상태를 읽을 수 없습니다.", "job-failed": "작업이 다음 상태로 종료되었습니다: {status}.",
+        "web-api": "웹 API", "mt5-library": "MT5 라이브러리", "account-info": "계정 정보", terminal: "MT5 터미널",
+        expert: "EA", broker: "브로커 연결", ready: "준비됨", missing: "누락됨", configured: "설정됨",
+        available: "사용 가능", "not-configured": "설정되지 않음", "not-checked": "확인 전",
+        "encryption-key-missing": "MT5 암호화 키 누락", "queue-count": "대기열: {queued}/{maximum}개 대기",
+        "running-count": "실행 중: {count}", "terminal-build": "MT5 터미널 빌드: {build}",
+        "no-jobs": "실행된 작업이 없습니다.", "job-history": "최근 작업 기록",
+        "history-empty": "실행된 작업이 없습니다.", "history-load-failed": "기록을 불러올 수 없습니다: {error}",
+        "history-progress": "진행: {completed}/{total}회", "history-score": "최고 점수: {score}",
+        "history-error": "오류: {error}", "status-queued": "대기 중", "status-running": "실행 중",
+        "status-completed": "완료", "status-failed": "실패",
+        "history-optimization": "최적화", "history-connection": "연결 확인",
+        "latest-failed": "최근 작업 실패 ({progress}회): {error}",
+        "latest-job": "최근 작업: {status} ({progress}회).", "status-check-failed": "설정을 확인할 수 없습니다: {error}",
+        "system-status-summary": "{summary}",
+        "queue-connection-check": "연결 확인을 대기열에 추가 중...", "connection-check-start-failed": "연결 확인을 시작할 수 없습니다.",
+        "waiting-mt5": "MT5 대기 중: {position}/{queued}번째...", "connecting-broker": "브로커에 연결 중...",
+        "connected-broker": "브로커 {server}에 연결되었습니다.", "connected-broker-currency": "브로커 {server}에 연결되었습니다 · 통화 {currency}.",
+        "connection-check-failed": "연결 확인 실패: {error}", "queue-optimization": "요청을 대기열에 추가 중...",
+        "optimization-failed": "최적화를 실행할 수 없습니다.", "queue-job": "작업 대기 중: {position}/{queued}번째 · 대기열 최대 {maximum}개.",
+        "running-tester": "Strategy Tester 실행 중: {progress}회 · 최고 점수: {score}",
+        "running-tester-no-score": "Strategy Tester 실행 중: {progress}회",
+        "complete-job": "{progress}회 완료. 최고 점수: {score}", "download-set": "최고 결과 .set 파일 다운로드: {filename}",
+        "download-excel": "Excel 다운로드: {filename}", "error-prefix": "오류: {error}",
+        "send-reset": "재설정 링크 보내기", "reset-password": "비밀번호 재설정"
+      },
+      ja: {
+        language: "言語", intro: "最初にサインインしてください。MT5情報はアカウントごとに暗号化して保存され、CurrencyListのシンボルはブローカーに自動的に合わせられます。",
+        account: "アカウント", "checking-session": "サインイン状態を確認中...", email: "メールアドレス", password: "パスワード", login: "サインイン",
+        register: "登録", "forgot-password": "パスワードを忘れた場合", "private-login": "個人アカウントでサインイン", logout: "サインアウト",
+        "connect-mt5": "MT5アカウント接続", "mt5-password": "MT5パスワード", "save-mt5": "MT5情報を暗号化して保存",
+        "mt5-status": "MT5の状態", "checking-server": "サーバー設定を確認中...", "terminal-not-checked": "ターミナルビルド: 接続未確認",
+        "check-broker": "ブローカー接続を確認", "broker-help": "確認中にMT5ターミナルを一時的に起動し、その後終了します。取引注文は行いません。確認前にportable MT5を終了してください。",
+        "ea-data": "EAと最適化データ", "ea-set": "EAパラメータファイル (.set)", "range-set": "最適化範囲ファイル (.set、任意)",
+        "range-help": "EAパラメータファイルで最適化が有効な数値パラメータがない場合、対応する範囲ファイル（例: optimization_ranges.set）をアップロードしてください。他のEAの範囲ファイルは使用しないでください。",
+        "ea-name": "EA名 (.ex5)", "ea-placeholder": "例: Peak.ex5", "ea-help": "MQL5\\Expertsにビルド済みの.ex5 EA名を入力してください。Webアプリは.mq5ソースをビルドせず、MetaEditorのエラーも表示しません。",
+        timeframe: "時間足", trials: "最適化試行回数", "from-date": "開始日 (YYYY.MM.DD)", "to-date": "終了日 (YYYY.MM.DD)",
+        deposit: "初期証拠金", currency: "口座通貨", leverage: "レバレッジ (例: 100 = 1:100)", "price-model": "価格モデル",
+        "every-tick": "全ティック", "one-minute-ohlc": "1分足 OHLC", "open-prices": "始値のみ",
+        "real-ticks": "実ティックに基づく全ティック", "execution-delay": "約定遅延",
+        "zero-latency": "遅延なし、理想的な約定", "random-delay": "ランダム遅延 (MQL5)",
+        "fixed-delay-mode": "固定遅延", "fixed-delay": "固定遅延 (ms)",
+        "custom-delay": "カスタム入力", "custom-delay-placeholder": "0～100 msを入力",
+        "fixed-delay-help": "0～100msを選択してください。カスタム値はこの範囲の整数です。",
+        "execution-help": "MQL5仕様: 遅延の90%は0～8秒、10%は9～18秒です。「始値のみ」モデルでは使用できません。",
+        "mql5-docs": "MQL5ドキュメント", "optimizer-note": "AI Optimizerが各試行を作成するため、MT5最適化はDisabledのままです。Math calculationsは金融パフォーマンスの評価に使用できません。",
+        "limits-note": "制限: 1ジョブ最大100試行、待機キュー最大5件、IPごとに1分あたり最適化リクエスト3件です。制限に達した場合は、ジョブまたは制限時間の終了後に再試行してください。",
+        "start-optimization": "最適化を開始", "private-auth-mode": "ローカル/従来のBasic Authモードを使用中です。",
+        "account-login": "サインイン中: {email}", "reset-prompt": "復旧を完了するには新しいパスワードを入力してください。",
+        "verification-failed": "メールを確認できませんでした。もう一度お試しください。", "registration-config-failed": "登録設定を読み込めません。",
+        "session-check-failed": "サインイン状態を確認できません。", "sending-recovery": "アカウント復旧をリクエスト中...",
+        "resetting-password": "パスワードを変更中...", "signing-in": "サインイン中...", "login-failed": "リクエストに失敗しました: {error}",
+        "recovery-prompt": "確認済みメールアドレスを入力してください。アカウントが存在する場合、復旧リンクを送信します。",
+        "personal-login-prompt": "個人アカウントでサインインしてください。", "sending-registration": "登録リクエストを送信中...",
+        "registration-failed": "登録に失敗しました: {error}", "logout-failed": "サインイン状態を終了できません。",
+        "logged-out": "サインアウトしました。", "saving-mt5": "MT5情報を暗号化して保存中...",
+        "mt5-saved": "MT5情報を暗号化して保存しました。", "save-mt5-failed": "MT5情報を保存できません: {error}",
+        "random-delay-incompatible": "「始値のみ」モデルでは約定遅延を使用できません。",
+        "job-read-failed": "ジョブの状態を読み込めません。", "job-failed": "ジョブは次の状態で終了しました: {status}。",
+        "web-api": "Web API", "mt5-library": "MT5ライブラリ", "account-info": "アカウント情報", terminal: "MT5ターミナル",
+        expert: "EA", broker: "ブローカー接続", ready: "準備完了", missing: "不足", configured: "設定済み",
+        available: "利用可能", "not-configured": "未設定", "not-checked": "未確認",
+        "encryption-key-missing": "MT5暗号化キーがありません", "queue-count": "キュー: {queued}/{maximum}件待機中",
+        "running-count": "実行中: {count}", "terminal-build": "MT5ターミナルビルド: {build}",
+        "no-jobs": "実行されたジョブはありません。", "job-history": "最近のジョブ履歴",
+        "history-empty": "実行されたジョブはありません。", "history-load-failed": "履歴を読み込めません: {error}",
+        "history-progress": "進捗: {completed}/{total}回", "history-score": "最高スコア: {score}",
+        "history-error": "エラー: {error}", "status-queued": "待機中", "status-running": "実行中",
+        "status-completed": "完了", "status-failed": "失敗",
+        "history-optimization": "最適化", "history-connection": "接続確認",
+        "latest-failed": "最新ジョブが失敗しました ({progress}回): {error}",
+        "latest-job": "最新ジョブ: {status} ({progress}回)。", "status-check-failed": "設定を確認できません: {error}",
+        "system-status-summary": "{summary}",
+        "queue-connection-check": "接続確認をキューに追加中...", "connection-check-start-failed": "接続確認を開始できません。",
+        "waiting-mt5": "MT5待機中: {position}/{queued}番目...", "connecting-broker": "ブローカーに接続中...",
+        "connected-broker": "ブローカー {server} に接続しました。", "connected-broker-currency": "ブローカー {server} に接続しました · 通貨 {currency}。",
+        "connection-check-failed": "接続確認に失敗しました: {error}", "queue-optimization": "リクエストをキューに追加中...",
+        "optimization-failed": "最適化を実行できません。", "queue-job": "ジョブ待機中: {position}/{queued}番目 · キュー上限 {maximum}件。",
+        "running-tester": "Strategy Tester実行中: {progress}回 · ベストスコア: {score}",
+        "running-tester-no-score": "Strategy Tester実行中: {progress}回",
+        "complete-job": "{progress}回完了。ベストスコア: {score}", "download-set": "最良結果の.setファイルをダウンロード: {filename}",
+        "download-excel": "Excelをダウンロード: {filename}", "error-prefix": "エラー: {error}",
+        "send-reset": "リセットリンクを送信", "reset-password": "パスワードをリセット"
+      },
+      th: {
+        language: "ภาษา", intro: "กรุณาเข้าสู่ระบบก่อน ข้อมูล MT5 จะถูกเข้ารหัสแยกตามบัญชี และระบบจะจับคู่สัญลักษณ์ใน CurrencyList กับโบรกเกอร์โดยอัตโนมัติ",
+        account: "บัญชี", "checking-session": "กำลังตรวจสอบเซสชัน...", email: "อีเมล", password: "รหัสผ่าน", login: "เข้าสู่ระบบ",
+        register: "สมัครสมาชิก", "forgot-password": "ลืมรหัสผ่าน", "private-login": "เข้าสู่ระบบบัญชีส่วนตัว", logout: "ออกจากระบบ",
+        "connect-mt5": "เชื่อมต่อบัญชี MT5", "mt5-password": "รหัสผ่าน MT5", "save-mt5": "บันทึกข้อมูล MT5 แบบเข้ารหัส",
+        "mt5-status": "สถานะ MT5", "checking-server": "กำลังตรวจสอบการตั้งค่าเซิร์ฟเวอร์...", "terminal-not-checked": "Build ของเทอร์มินัล: ยังไม่ได้ตรวจสอบการเชื่อมต่อ",
+        "check-broker": "ตรวจสอบการเชื่อมต่อโบรกเกอร์", "broker-help": "การตรวจสอบจะเปิดเทอร์มินัล MT5 ชั่วคราวแล้วปิดภายหลัง โดยไม่ส่งคำสั่งซื้อขาย กรุณาปิด MT5 portable ก่อนตรวจสอบ",
+        "ea-data": "ข้อมูล EA และการปรับแต่ง", "ea-set": "ไฟล์พารามิเตอร์ EA (.set)", "range-set": "ไฟล์ช่วงการปรับแต่ง (.set, ไม่บังคับ)",
+        "range-help": "หากไฟล์พารามิเตอร์ EA ไม่มีพารามิเตอร์ตัวเลขที่เปิดให้ปรับแต่ง ให้อัปโหลดไฟล์ช่วงที่ตรงกัน (เช่น optimization_ranges.set) อย่าใช้ไฟล์ช่วงของ EA อื่น",
+        "ea-name": "ชื่อ EA (.ex5)", "ea-placeholder": "ตัวอย่าง: Peak.ex5", "ea-help": "กรอกชื่อ EA .ex5 ที่ build แล้วใน MQL5\\Experts เว็บแอปไม่ build ซอร์ส .mq5 และไม่แสดงข้อผิดพลาดจาก MetaEditor",
+        timeframe: "กรอบเวลา", trials: "จำนวนรอบการปรับแต่ง", "from-date": "วันที่เริ่มต้น (YYYY.MM.DD)", "to-date": "วันที่สิ้นสุด (YYYY.MM.DD)",
+        deposit: "เงินฝากเริ่มต้น", currency: "สกุลเงินบัญชี", leverage: "เลเวอเรจ (เช่น 100 = 1:100)", "price-model": "รูปแบบราคา",
+        "every-tick": "ทุก Tick", "one-minute-ohlc": "OHLC 1 นาที", "open-prices": "ราคาเปิดเท่านั้น",
+        "real-ticks": "ทุก Tick จาก Tick จริง", "execution-delay": "ความล่าช้าในการดำเนินการ",
+        "zero-latency": "ไม่มีความล่าช้า ดำเนินการแบบอุดมคติ", "random-delay": "ความล่าช้าแบบสุ่ม (MQL5)",
+        "fixed-delay-mode": "ความล่าช้าคงที่", "fixed-delay": "ความล่าช้าคงที่ (มิลลิวินาที)",
+        "custom-delay": "กำหนดเอง", "custom-delay-placeholder": "กรอก 0–100 มิลลิวินาที",
+        "fixed-delay-help": "เลือกได้ตั้งแต่ 0 ถึง 100 มิลลิวินาที ค่าที่กำหนดเองต้องเป็นจำนวนเต็มในช่วงนี้",
+        "execution-help": "ตาม MQL5: 90% ของความล่าช้าอยู่ที่ 0–8 วินาที และ 10% อยู่ที่ 9–18 วินาที ใช้ไม่ได้กับรูปแบบราคาเปิดเท่านั้น",
+        "mql5-docs": "เอกสาร MQL5", "optimizer-note": "ปิด MT5 optimization ไว้ เนื่องจาก AI Optimizer สร้างแต่ละรอบทดลองเอง โหมด Math calculations ใช้ประเมินผลการเงินไม่ได้",
+        "limits-note": "ขีดจำกัด: สูงสุด 100 รอบต่องาน รอในคิวได้ 5 งาน และส่งคำขอปรับแต่งได้ 3 ครั้งต่อนาทีต่อ IP หากถึงขีดจำกัด ให้รอจนงานหรือช่วงเวลาจำกัดสิ้นสุดแล้วลองใหม่",
+        "start-optimization": "เริ่มปรับแต่ง", "private-auth-mode": "กำลังใช้โหมด local/Basic Auth แบบเดิม",
+        "account-login": "เข้าสู่ระบบเป็น: {email}", "reset-prompt": "กรอกรหัสผ่านใหม่เพื่อดำเนินการกู้คืนให้เสร็จ",
+        "verification-failed": "ยืนยันอีเมลไม่ได้ กรุณาลองอีกครั้ง", "registration-config-failed": "อ่านการตั้งค่าการสมัครไม่ได้",
+        "session-check-failed": "ตรวจสอบเซสชันไม่ได้", "sending-recovery": "กำลังส่งคำขอกู้คืนบัญชี...",
+        "resetting-password": "กำลังเปลี่ยนรหัสผ่าน...", "signing-in": "กำลังเข้าสู่ระบบ...", "login-failed": "คำขอล้มเหลว: {error}",
+        "recovery-prompt": "กรอกอีเมลที่ยืนยันแล้ว หากมีบัญชี ระบบจะส่งลิงก์กู้คืนให้",
+        "personal-login-prompt": "เข้าสู่ระบบด้วยบัญชีส่วนตัว", "sending-registration": "กำลังส่งคำขอสมัครสมาชิก...",
+        "registration-failed": "สมัครสมาชิกไม่สำเร็จ: {error}", "logout-failed": "ออกจากเซสชันไม่ได้",
+        "logged-out": "ออกจากระบบแล้ว", "saving-mt5": "กำลังบันทึกข้อมูล MT5 แบบเข้ารหัส...",
+        "mt5-saved": "บันทึกข้อมูล MT5 แบบเข้ารหัสแล้ว", "save-mt5-failed": "บันทึกข้อมูล MT5 ไม่สำเร็จ: {error}",
+        "random-delay-incompatible": "ไม่สามารถใช้โหมดหน่วงเวลาร่วมกับรูปแบบราคาเปิดเท่านั้นได้",
+        "job-read-failed": "อ่านสถานะงานไม่ได้", "job-failed": "งานสิ้นสุดด้วยสถานะ {status}",
+        "web-api": "Web API", "mt5-library": "ไลบรารี MT5", "account-info": "ข้อมูลบัญชี", terminal: "เทอร์มินัล MT5",
+        expert: "EA", broker: "การเชื่อมต่อโบรกเกอร์", ready: "พร้อม", missing: "ขาดหาย", configured: "ตั้งค่าแล้ว",
+        available: "พร้อมใช้งาน", "not-configured": "ยังไม่ได้ตั้งค่า", "not-checked": "ยังไม่ได้ตรวจสอบ",
+        "encryption-key-missing": "ไม่มีคีย์เข้ารหัส MT5", "queue-count": "คิว: รอ {queued}/{maximum} งาน",
+        "running-count": "กำลังทำงาน: {count}", "terminal-build": "Build เทอร์มินัล MT5: {build}",
+        "no-jobs": "ยังไม่มีงานที่ทำงาน", "job-history": "ประวัติงานล่าสุด",
+        "history-empty": "ยังไม่มีงานที่ทำงาน", "history-load-failed": "โหลดประวัติไม่ได้: {error}",
+        "history-progress": "ความคืบหน้า: {completed}/{total} รอบ", "history-score": "คะแนนดีที่สุด: {score}",
+        "history-error": "ข้อผิดพลาด: {error}", "status-queued": "รอคิว", "status-running": "กำลังทำงาน",
+        "status-completed": "เสร็จสิ้น", "status-failed": "ล้มเหลว",
+        "history-optimization": "การปรับแต่ง", "history-connection": "ตรวจสอบการเชื่อมต่อ",
+        "latest-failed": "งานล่าสุดล้มเหลว ({progress} รอบ): {error}",
+        "latest-job": "งานล่าสุด: {status} ({progress} รอบ)", "status-check-failed": "ตรวจสอบการตั้งค่าไม่ได้: {error}",
+        "system-status-summary": "{summary}",
+        "queue-connection-check": "กำลังเพิ่มการตรวจสอบการเชื่อมต่อในคิว...", "connection-check-start-failed": "เริ่มตรวจสอบการเชื่อมต่อไม่ได้",
+        "waiting-mt5": "กำลังรอ MT5: ลำดับ {position}/{queued}...", "connecting-broker": "กำลังเชื่อมต่อโบรกเกอร์...",
+        "connected-broker": "เชื่อมต่อโบรกเกอร์ {server} แล้ว", "connected-broker-currency": "เชื่อมต่อโบรกเกอร์ {server} แล้ว · สกุลเงิน {currency}",
+        "connection-check-failed": "ตรวจสอบการเชื่อมต่อล้มเหลว: {error}", "queue-optimization": "กำลังเพิ่มคำขอในคิว...",
+        "optimization-failed": "เริ่มการปรับแต่งไม่ได้", "queue-job": "งานกำลังรอ: ลำดับ {position}/{queued} · คิวสูงสุด {maximum} งาน",
+        "running-tester": "กำลังทำงาน Strategy Tester: {progress} รอบ · คะแนนดีที่สุด: {score}",
+        "running-tester-no-score": "กำลังทำงาน Strategy Tester: {progress} รอบ",
+        "complete-job": "เสร็จสิ้น {progress} รอบ คะแนนดีที่สุด: {score}", "download-set": "ดาวน์โหลดไฟล์ .set ที่ดีที่สุด: {filename}",
+        "download-excel": "ดาวน์โหลด Excel: {filename}", "error-prefix": "ข้อผิดพลาด: {error}",
+        "send-reset": "ส่งลิงก์รีเซ็ตรหัสผ่าน", "reset-password": "รีเซ็ตรหัสผ่าน"
+      }
+    };
+    const languageSelect = document.getElementById("language-select");
+    let currentLanguage = "vi";
+
+    function t(key, values = {}) {
+      const template = messages[currentLanguage][key] || messages.vi[key] || key;
+      return template.replace(/\{(\w+)\}/g, (_, name) => values[name] ?? "");
+    }
+
+    function setLocalizedText(element, key, values = {}) {
+      element.dataset.i18nMessage = key;
+      element.dataset.i18nValues = JSON.stringify(values);
+      element.textContent = t(key, values);
+    }
+
+    function applyLanguage() {
+      document.documentElement.lang = {
+        vi: "vi-VN",
+        en: "en",
+        ko: "ko-KR",
+        ja: "ja-JP",
+        th: "th-TH",
+      }[currentLanguage];
+      document.querySelectorAll("[data-i18n]").forEach((element) => {
+        element.textContent = t(element.dataset.i18n);
+      });
+      document.querySelectorAll("[data-i18n-placeholder]").forEach((element) => {
+        element.placeholder = t(element.dataset.i18nPlaceholder);
+      });
+      document.querySelectorAll("[data-i18n-aria-label]").forEach((element) => {
+        element.setAttribute("aria-label", t(element.dataset.i18nAriaLabel));
+      });
+      document.querySelectorAll("[data-i18n-message]").forEach((element) => {
+        const values = JSON.parse(element.dataset.i18nValues || "{}");
+        element.textContent = t(element.dataset.i18nMessage, values);
+      });
+      loginButton.textContent = t(
+        accountMode === "recovery" ? "send-reset"
+          : accountMode === "reset" ? "reset-password" : "login"
+      );
+    }
+
+    try {
+      const savedLanguage = localStorage.getItem("mt5-optimizer-language");
+      const browserLanguage = navigator.language.toLowerCase();
+        currentLanguage = ["en", "vi", "ko", "ja", "th"].includes(savedLanguage)
+        ? savedLanguage
+          : ["en", "vi", "ko", "ja", "th"].find((language) =>
+            browserLanguage.startsWith(language)
+          ) || "vi";
+    } catch {
+      const browserLanguage = navigator.language.toLowerCase();
+      currentLanguage = ["en", "vi", "ko", "ja", "th"].find((language) =>
+        browserLanguage.startsWith(language)
+      ) || "vi";
+    }
+
+    const form = document.getElementById("optimizer-form");
   const button = document.getElementById("submit-button");
   const status = document.getElementById("status");
   const systemStatusDetails = document.getElementById("system-status-details");
   const terminalBuildStatus = document.getElementById("terminal-build-status");
   const latestJobStatus = document.getElementById("latest-job-status");
+  const jobHistory = document.getElementById("job-history");
+  const jobHistoryList = document.getElementById("job-history-list");
+  const jobHistoryMessage = document.getElementById("job-history-message");
   const connectionCheckButton = document.getElementById("connection-check-button");
   const connectionStatus = document.getElementById("connection-status");
   const accountForm = document.getElementById("account-form");
@@ -323,16 +735,34 @@
   const systemStatus = document.getElementById("system-status");
   const modelSelect = form.elements.model;
   const executionSelect = form.elements.execution_mode;
+  const fixedDelayFields = document.getElementById("fixed-delay-fields");
+  const fixedDelayPreset = document.getElementById("execution-delay-preset");
+  const fixedDelayCustom = document.getElementById("execution-delay-custom");
+  const fixedDelayValue = document.getElementById("execution-delay-value");
   const executionHelp = document.getElementById("execution-help");
   let workspaceVisible = false;
   let accountMode = "login";
   let passwordResetToken = null;
   let recoveryEnabled = false;
 
+  languageSelect.value = currentLanguage;
+  applyLanguage();
+  languageSelect.addEventListener("change", () => {
+    currentLanguage = languageSelect.value;
+    try {
+      localStorage.setItem("mt5-optimizer-language", currentLanguage);
+    } catch {
+      // The selected language still applies for this page session.
+    }
+    applyLanguage();
+    if (workspaceVisible) loadSystemStatus();
+  });
+
   function showWorkspace(visible, legacy = false) {
     workspaceVisible = visible;
     form.hidden = !visible;
     systemStatus.hidden = !visible;
+    jobHistory.hidden = !visible;
     status.hidden = !visible;
     accountEmail.disabled = visible;
     accountPassword.hidden = visible;
@@ -354,11 +784,10 @@
     passwordLabel.hidden = mode === "recovery";
     accountPassword.disabled = mode === "recovery";
     accountPassword.required = mode !== "recovery";
-    loginButton.textContent = mode === "recovery"
-      ? "Gửi liên kết đặt lại"
-      : mode === "reset"
-        ? "Đặt lại mật khẩu"
-        : "Đăng nhập";
+    loginButton.textContent = t(
+      mode === "recovery" ? "send-reset"
+        : mode === "reset" ? "reset-password" : "login"
+    );
     registerButton.hidden = mode !== "login" || workspaceVisible;
     recoveryButton.hidden =
       mode !== "login" || workspaceVisible || !recoveryEnabled;
@@ -372,9 +801,11 @@
     }
     const account = await response.json();
     showWorkspace(true, account.legacy_auth);
-    accountMessage.textContent = account.email
-      ? `Đang đăng nhập: ${account.email}`
-      : "Đang dùng chế độ local/Basic Auth cũ.";
+    setLocalizedText(
+      accountMessage,
+      account.email ? "account-login" : "private-auth-mode",
+      account.email ? { email: account.email } : {}
+    );
     return true;
   }
 
@@ -385,7 +816,7 @@
       history.replaceState(null, "", location.pathname);
       setAccountMode("reset");
       showWorkspace(false);
-      accountMessage.textContent = "Nhập mật khẩu mới để hoàn tất khôi phục.";
+      setLocalizedText(accountMessage, "reset-prompt");
     }
     if (verificationToken) {
       history.replaceState(null, "", location.pathname);
@@ -398,7 +829,7 @@
         const result = await response.json();
         accountMessage.textContent = result.message || result.detail;
       } catch {
-        accountMessage.textContent = "Không thể xác minh email. Hãy thử lại.";
+        setLocalizedText(accountMessage, "verification-failed");
       }
     }
     try {
@@ -412,7 +843,7 @@
       }
     } catch {
       registerButton.disabled = true;
-      accountMessage.textContent = "Không thể đọc cấu hình đăng ký.";
+      setLocalizedText(accountMessage, "registration-config-failed");
     }
     try {
       if (passwordResetToken) {
@@ -424,18 +855,18 @@
       }
     } catch {
       showWorkspace(false);
-      accountMessage.textContent = "Không thể kiểm tra phiên đăng nhập.";
+      setLocalizedText(accountMessage, "session-check-failed");
     }
   }
 
   accountForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     loginButton.disabled = true;
-    accountMessage.textContent = accountMode === "recovery"
-      ? "Đang yêu cầu khôi phục..."
-      : accountMode === "reset"
-        ? "Đang đổi mật khẩu..."
-        : "Đang đăng nhập...";
+    setLocalizedText(
+      accountMessage,
+      accountMode === "recovery" ? "sending-recovery"
+        : accountMode === "reset" ? "resetting-password" : "signing-in"
+    );
     try {
       let endpoint = "/auth/login";
       let body = {
@@ -477,7 +908,7 @@
         loadSystemStatus();
       }
     } catch (error) {
-      accountMessage.textContent = `Không thành công: ${error.message}`;
+      setLocalizedText(accountMessage, "login-failed", { error: error.message });
     } finally {
       loginButton.disabled = false;
     }
@@ -485,19 +916,18 @@
 
   recoveryButton.addEventListener("click", () => {
     setAccountMode("recovery");
-    accountMessage.textContent =
-      "Nhập email đã xác minh. Nếu tài khoản tồn tại, liên kết khôi phục sẽ được gửi.";
+    setLocalizedText(accountMessage, "recovery-prompt");
   });
 
   accountLoginSwitch.addEventListener("click", () => {
     setAccountMode("login");
     showWorkspace(false);
-    accountMessage.textContent = "Đăng nhập bằng tài khoản cá nhân của bạn.";
+    setLocalizedText(accountMessage, "personal-login-prompt");
   });
 
   registerButton.addEventListener("click", async () => {
     registerButton.disabled = true;
-    accountMessage.textContent = "Đang gửi yêu cầu đăng ký...";
+    setLocalizedText(accountMessage, "sending-registration");
     try {
       const response = await fetch("/auth/register", {
         method: "POST",
@@ -514,7 +944,7 @@
       accountPassword.value = "";
       accountMessage.textContent = result.message;
     } catch (error) {
-      accountMessage.textContent = `Đăng ký thất bại: ${error.message}`;
+      setLocalizedText(accountMessage, "registration-failed", { error: error.message });
     } finally {
       registerButton.disabled = false;
     }
@@ -524,10 +954,10 @@
     try {
       const response = await fetch("/auth/logout", { method: "POST" });
       if (!response.ok) {
-        throw new Error("Không thể kết thúc phiên đăng nhập.");
+        throw new Error(t("logout-failed"));
       }
       showWorkspace(false);
-      accountMessage.textContent = "Bạn đã đăng xuất.";
+      setLocalizedText(accountMessage, "logged-out");
     } catch (error) {
       accountMessage.textContent = error.message;
     }
@@ -537,7 +967,7 @@
     event.preventDefault();
     const submitButton = credentialForm.querySelector("button");
     submitButton.disabled = true;
-    accountMessage.textContent = "Đang lưu thông tin MT5 mã hóa...";
+    setLocalizedText(accountMessage, "saving-mt5");
     try {
       const response = await fetch("/account/mt5", {
         method: "PUT",
@@ -549,19 +979,30 @@
         throw new Error(result.detail || "Không thể lưu thông tin MT5.");
       }
       credentialForm.reset();
-      accountMessage.textContent = "Thông tin MT5 đã được lưu mã hóa.";
+      setLocalizedText(accountMessage, "mt5-saved");
       loadSystemStatus();
     } catch (error) {
-      accountMessage.textContent = `Lưu MT5 thất bại: ${error.message}`;
+      setLocalizedText(accountMessage, "save-mt5-failed", { error: error.message });
     } finally {
       submitButton.disabled = false;
     }
   });
 
   function validateExecutionMode() {
-    const incompatible = modelSelect.value === "2" && executionSelect.value === "1";
+    const fixedDelayEnabled = executionSelect.value === "2";
+    const customDelaySelected = fixedDelayPreset.value === "custom";
+    fixedDelayFields.hidden = !fixedDelayEnabled;
+    executionHelp.hidden = executionSelect.value !== "1";
+    fixedDelayCustom.hidden = !fixedDelayEnabled || !customDelaySelected;
+    fixedDelayCustom.disabled = !fixedDelayEnabled || !customDelaySelected;
+    fixedDelayCustom.required = fixedDelayEnabled && customDelaySelected;
+    fixedDelayValue.value = customDelaySelected
+      ? fixedDelayCustom.value
+      : fixedDelayPreset.value;
+    const incompatible =
+      modelSelect.value === "2" && ["1", "2"].includes(executionSelect.value);
     const message = incompatible
-      ? "MQL5 Random Delay không dùng được với mô hình Open prices only."
+      ? t("random-delay-incompatible")
       : "";
     executionSelect.setCustomValidity(message);
     executionHelp.setAttribute("aria-invalid", String(incompatible));
@@ -574,13 +1015,13 @@
       const response = await fetch(`/jobs/${encodeURIComponent(jobId)}`);
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.detail || "Không thể đọc trạng thái job.");
+        throw new Error(data.detail || t("job-read-failed"));
       }
       job = data;
       onUpdate(job);
     } while (job.status === "queued" || job.status === "running");
     if (job.status !== "completed") {
-      throw new Error(job.error || `Job kết thúc với trạng thái ${job.status}.`);
+      throw new Error(job.error || t("job-failed", { status: job.status }));
     }
     return job;
   }
@@ -594,68 +1035,181 @@
         throw new Error(data.detail || "Không thể đọc cấu hình máy chủ.");
       }
       const labels = {
-        application: "Web API",
-        mt5_package: "Thư viện MT5",
-        account: "Thông tin tài khoản",
-        terminal: "Terminal MT5",
-        expert: "EA",
-        broker: "Kết nối broker",
+        application: "web-api",
+        mt5_package: "mt5-library",
+        account: "account-info",
+        terminal: "terminal",
+        expert: "expert",
+        broker: "broker",
       };
       const stateLabels = {
-        ready: "sẵn sàng",
-        missing: "thiếu",
-        configured: "đã cấu hình",
-        available: "có sẵn",
-        not_configured: "chưa cấu hình",
-        not_checked: "chưa kiểm tra",
-        encryption_key_missing: "thiếu khóa giải mã MT5",
+        ready: "ready",
+        missing: "missing",
+        configured: "configured",
+        available: "available",
+        not_configured: "not-configured",
+        not_checked: "not-checked",
+        encryption_key_missing: "encryption-key-missing",
       };
-      systemStatusDetails.textContent = Object.entries(labels)
-        .map(([key, label]) => `${label}: ${stateLabels[data[key].status] || data[key].status}`)
+      const summary =
+        Object.entries(labels)
+        .map(([key, label]) => {
+          const stateKey = stateLabels[data[key].status];
+          const state = stateKey ? t(stateKey) : data[key].status;
+          return `${t(label)}: ${state}`;
+        })
         .join(" · ") +
-        ` · Hàng đợi: ${data.jobs.queued_jobs}/${data.jobs.maximum_queued_jobs} job chờ` +
-        ` · Đang chạy: ${data.jobs.running_jobs}`;
+        ` · ${t("queue-count", {
+          queued: data.jobs.queued_jobs,
+          maximum: data.jobs.maximum_queued_jobs,
+        })}` +
+        ` · ${t("running-count", { count: data.jobs.running_jobs })}`;
+      setLocalizedText(systemStatusDetails, "system-status-summary", {
+        summary,
+      });
       if (data.latest_job?.terminal_build !== null && data.latest_job?.terminal_build !== undefined) {
-        terminalBuildStatus.textContent = `Build terminal MT5: ${data.latest_job.terminal_build}`;
+        setLocalizedText(terminalBuildStatus, "terminal-build", {
+          build: data.latest_job.terminal_build,
+        });
       }
       if (!data.latest_job) {
-        latestJobStatus.textContent = "Chưa có job nào được chạy.";
+        setLocalizedText(latestJobStatus, "no-jobs");
       } else {
         const job = data.latest_job;
-        const progress = `${job.completed_trials}/${job.total_trials} lượt`;
-        latestJobStatus.textContent = job.error
-          ? `Job gần nhất lỗi (${progress}): ${job.error}`
-          : `Job gần nhất: ${job.status} (${progress}).`;
+        const progress = `${job.completed_trials}/${job.total_trials}`;
+        setLocalizedText(
+          latestJobStatus,
+          job.error ? "latest-failed" : "latest-job",
+          job.error
+            ? { progress, error: job.error }
+            : { status: job.status, progress }
+        );
+      }
+      await loadJobHistory();
+    } catch (error) {
+      setLocalizedText(systemStatusDetails, "status-check-failed", {
+        error: error.message,
+      });
+    }
+  }
+
+  async function loadJobHistory() {
+    if (!workspaceVisible) return;
+    try {
+      const response = await fetch("/jobs?limit=20");
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || t("job-read-failed"));
+      }
+      jobHistoryList.replaceChildren();
+      if (data.jobs.length === 0) {
+        setLocalizedText(jobHistoryMessage, "history-empty");
+        return;
+      }
+      jobHistoryMessage.textContent = "";
+      for (const job of data.jobs) {
+        const item = document.createElement("li");
+        item.className = "history-item";
+        const heading = document.createElement("div");
+        heading.className = "history-heading";
+        const type = document.createElement("strong");
+        setLocalizedText(
+          type,
+          job.job_type === "connection_check"
+            ? "history-connection"
+            : "history-optimization"
+        );
+        const statusLabel = document.createElement("span");
+        statusLabel.className = "history-status";
+        setLocalizedText(statusLabel, `status-${job.status}`);
+        heading.append(type, statusLabel);
+        item.appendChild(heading);
+
+        const createdAt = document.createElement("p");
+        createdAt.textContent = new Date(job.created_at).toLocaleString(
+          document.documentElement.lang
+        );
+        item.appendChild(createdAt);
+        const progress = document.createElement("p");
+        setLocalizedText(progress, "history-progress", {
+          completed: job.completed_trials,
+          total: job.total_trials,
+        });
+        item.appendChild(progress);
+
+        if (job.best_value !== null && job.best_value !== undefined) {
+          const score = document.createElement("p");
+          setLocalizedText(score, "history-score", { score: job.best_value });
+          item.appendChild(score);
+        }
+        if (job.error) {
+          const error = document.createElement("p");
+          setLocalizedText(error, "history-error", { error: job.error });
+          item.appendChild(error);
+        }
+        if (job.result?.best_set_file) {
+          addLink(
+            item,
+            `/results/${encodeURIComponent(job.result.best_set_file)}`,
+            "download-set",
+            { filename: job.result.best_set_file }
+          );
+        }
+        for (const report of job.result?.excel_reports || []) {
+          addLink(
+            item,
+            `/reports/${encodeURIComponent(report.filename)}`,
+            "download-excel",
+            { filename: report.filename }
+          );
+        }
+        jobHistoryList.appendChild(item);
       }
     } catch (error) {
-      systemStatusDetails.textContent = `Không thể kiểm tra cấu hình: ${error.message}`;
+      jobHistoryList.replaceChildren();
+      setLocalizedText(jobHistoryMessage, "history-load-failed", {
+        error: error.message,
+      });
     }
   }
 
   connectionCheckButton.addEventListener("click", async () => {
     connectionCheckButton.disabled = true;
-    connectionStatus.textContent = "Đang xếp hàng kiểm tra kết nối...";
+    setLocalizedText(connectionStatus, "queue-connection-check");
     try {
       const response = await fetch("/connection-check", { method: "POST" });
       const result = await response.json();
       if (!response.ok) {
-        throw new Error(result.detail || "Không thể bắt đầu kiểm tra kết nối.");
+        throw new Error(result.detail || t("connection-check-start-failed"));
       }
       const job = await readJobUntilFinished(result.job_id, (current) => {
-        connectionStatus.textContent = current.status === "queued"
-          ? `Đang chờ MT5: vị trí ${current.queue_position}/${current.queued_jobs}...`
-          : "Đang kết nối tới broker...";
+        setLocalizedText(
+          connectionStatus,
+          current.status === "queued" ? "waiting-mt5" : "connecting-broker",
+          {
+            position: current.queue_position,
+            queued: current.queued_jobs,
+          }
+        );
       });
-      connectionStatus.textContent =
-        `Đã kết nối broker ${job.result.server || ""}` +
-        `${job.result.currency ? ` · tiền tệ ${job.result.currency}` : ""}.`;
+      setLocalizedText(
+        connectionStatus,
+        job.result.currency ? "connected-broker-currency" : "connected-broker",
+        {
+          server: job.result.server || "",
+          currency: job.result.currency || "",
+        }
+      );
       if (job.result.terminal_build !== null && job.result.terminal_build !== undefined) {
-        terminalBuildStatus.textContent =
-          `Build terminal MT5: ${job.result.terminal_build}`;
+        setLocalizedText(terminalBuildStatus, "terminal-build", {
+          build: job.result.terminal_build,
+        });
       }
       loadSystemStatus();
     } catch (error) {
-      connectionStatus.textContent = `Kiểm tra thất bại: ${error.message}`;
+      setLocalizedText(connectionStatus, "connection-check-failed", {
+        error: error.message,
+      });
     } finally {
       connectionCheckButton.disabled = false;
     }
@@ -664,21 +1218,24 @@
   window.setInterval(loadSystemStatus, 15000);
   modelSelect.addEventListener("change", validateExecutionMode);
   executionSelect.addEventListener("change", validateExecutionMode);
+  fixedDelayPreset.addEventListener("change", validateExecutionMode);
+  fixedDelayCustom.addEventListener("input", validateExecutionMode);
   validateExecutionMode();
   initializeAccount();
 
-  function addLink(parent, href, text) {
+  function addLink(parent, href, key, values) {
     const link = document.createElement("a");
     link.href = href;
-    link.textContent = text;
+    setLocalizedText(link, key, values);
     link.download = "";
     parent.appendChild(link);
   }
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    validateExecutionMode();
     button.disabled = true;
-    status.textContent = "Đang đưa yêu cầu vào hàng đợi...";
+    setLocalizedText(status, "queue-optimization");
     try {
       const response = await fetch("/optimize", {
         method: "POST",
@@ -686,35 +1243,55 @@
       });
       const result = await response.json();
       if (!response.ok) {
-        throw new Error(result.detail || "Không thể chạy tối ưu.");
+        throw new Error(result.detail || t("optimization-failed"));
       }
 
       const jobId = result.job_id;
       const job = await readJobUntilFinished(jobId, (current) => {
         if (current.status === "queued") {
-          status.textContent =
-            `Job đang chờ: vị trí ${current.queue_position}/${current.queued_jobs}` +
-            ` · Hàng đợi tối đa ${current.maximum_queued_jobs} job.`;
+          setLocalizedText(status, "queue-job", {
+            position: current.queue_position,
+            queued: current.queued_jobs,
+            maximum: current.maximum_queued_jobs,
+          });
         } else if (current.status === "running") {
-          const progress = `${current.completed_trials}/${current.total_trials} lượt`;
-          const best = current.best_value === null ? "" : ` · Best score: ${current.best_value}`;
-          status.textContent = `Đang chạy Strategy Tester: ${progress}${best}`;
+          const progress = `${current.completed_trials}/${current.total_trials}`;
+          setLocalizedText(
+            status,
+            current.best_value === null
+              ? "running-tester-no-score"
+              : "running-tester",
+            { progress, score: current.best_value }
+          );
         }
       });
 
       const completed = job.result;
+      delete status.dataset.i18nMessage;
+      delete status.dataset.i18nValues;
       status.replaceChildren();
       const summary = document.createElement("p");
-      summary.textContent = `Hoàn tất ${job.completed_trials}/${job.total_trials} lượt. Best score: ${completed.best_value}`;
+      setLocalizedText(summary, "complete-job", {
+        progress: `${job.completed_trials}/${job.total_trials}`,
+        score: completed.best_value,
+      });
       status.appendChild(summary);
-      addLink(status, completed.download_url, `Tải file .set tốt nhất: ${completed.best_set_file}`);
+      addLink(
+        status,
+        completed.download_url,
+        "download-set",
+        { filename: completed.best_set_file }
+      );
       for (const report of completed.excel_reports) {
-        addLink(status, report.download_url, `Tải Excel: ${report.filename}`);
+        addLink(status, report.download_url, "download-excel", {
+          filename: report.filename,
+        });
       }
     } catch (error) {
-      status.textContent = `Lỗi: ${error.message}`;
+      setLocalizedText(status, "error-prefix", { error: error.message });
     } finally {
       button.disabled = false;
+      loadJobHistory();
     }
   });
 </script>

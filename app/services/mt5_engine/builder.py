@@ -218,6 +218,7 @@ class MT5ConfigBuilder:
         leverage: int = 100,
         model: int = 1,
         execution_mode: int = 0,
+        execution_delay_ms: int = 0,
     ) -> str:
         if deposit <= 0 or not math.isfinite(deposit):
             raise ValueError("MT5 tester deposit must be a positive finite number.")
@@ -233,14 +234,24 @@ class MT5ConfigBuilder:
             raise ValueError(
                 "MT5 tester model must be 0, 1, 2, or 4 for financial testing."
             )
-        if execution_mode not in {0, 1}:
+        if execution_mode not in {0, 1, 2}:
             raise ValueError(
-                "MT5 execution mode must be 0 (No Delay) or 1 (Random Delay)."
+                "MT5 execution mode must be 0 (No Delay), 1 (Random Delay), "
+                "or 2 (Fixed Delay)."
             )
+        if not 0 <= execution_delay_ms <= 100:
+            raise ValueError("MT5 fixed execution delay must be between 0 and 100 ms.")
         if execution_mode == 1 and model == 2:
             raise ValueError(
                 "MQL5 Random Delay cannot be used with Open prices only."
             )
+        if execution_mode == 2 and model == 2:
+            raise ValueError(
+                "Fixed execution delay cannot be used with Open prices only."
+            )
+        execution_delay_setting = (
+            f"ExecutionDelay={execution_delay_ms}\n" if execution_mode == 2 else ""
+        )
 
         ini_content = f"""[Common]
 Login={login}
@@ -259,7 +270,7 @@ Deposit={deposit:g}
 Currency={currency.upper()}
 Leverage={leverage}
 ExecutionMode={execution_mode}
-ExpertParameters={os.path.basename(set_file_path)}
+{execution_delay_setting}ExpertParameters={os.path.basename(set_file_path)}
 Report={os.path.basename(report_path)}
 ReplaceReport=1
 ShutdownTerminal=1

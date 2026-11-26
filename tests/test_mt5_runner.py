@@ -135,6 +135,71 @@ class MT5BacktestRunnerTests(unittest.TestCase):
                     execution_mode=1,
                 )
 
+    def test_fixed_execution_delay_is_written_to_tester_ini(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            builder = MT5ConfigBuilder(str(root / "workspace"))
+            ini_path = builder.build_ini_file(
+                trial_id="fixed-delay",
+                expert_name="Peak.ex5",
+                symbol="EURUSD",
+                period="H1",
+                set_file_path=str(root / "trial.set"),
+                report_path=str(root / "report.htm"),
+                login="1234",
+                password="secret",
+                server="Broker-Demo",
+                execution_mode=2,
+                execution_delay_ms=50,
+            )
+
+            content = Path(ini_path).read_text(encoding="utf-8")
+
+            self.assertIn("ExecutionMode=2", content)
+            self.assertIn("ExecutionDelay=50", content)
+
+    def test_builder_rejects_fixed_delay_outside_millisecond_range(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            builder = MT5ConfigBuilder(str(root / "workspace"))
+
+            with self.assertRaisesRegex(ValueError, "between 0 and 100 ms"):
+                builder.build_ini_file(
+                    trial_id="invalid-fixed-delay",
+                    expert_name="Peak.ex5",
+                    symbol="EURUSD",
+                    period="H1",
+                    set_file_path=str(root / "trial.set"),
+                    report_path=str(root / "report.htm"),
+                    login="1234",
+                    password="secret",
+                    server="Broker-Demo",
+                    execution_mode=2,
+                    execution_delay_ms=101,
+                )
+
+    def test_no_delay_and_random_modes_do_not_write_fixed_delay(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            builder = MT5ConfigBuilder(str(root / "workspace"))
+
+            for mode in (0, 1):
+                ini_path = builder.build_ini_file(
+                    trial_id=f"mode-{mode}",
+                    expert_name="Peak.ex5",
+                    symbol="EURUSD",
+                    period="H1",
+                    set_file_path=str(root / "trial.set"),
+                    report_path=str(root / "report.htm"),
+                    login="1234",
+                    password="secret",
+                    server="Broker-Demo",
+                    execution_mode=mode,
+                    execution_delay_ms=50,
+                )
+                content = Path(ini_path).read_text(encoding="utf-8")
+                self.assertNotIn("ExecutionDelay=", content)
+
     def test_copies_tester_report_to_workspace_report_path(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

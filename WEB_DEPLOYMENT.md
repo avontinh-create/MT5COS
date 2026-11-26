@@ -25,6 +25,16 @@ in the browser, source control, or chat.
    PostgreSQL database and set `DATABASE_URL` to its connection URL. The
    PostgreSQL driver is installed from `requirements.txt`. Keep the database
    private to the application host and back it up independently.
+   Apply schema migrations after setting `DATABASE_URL` and before starting
+   the API:
+
+   ```powershell
+   .\venv\Scripts\alembic.exe upgrade head
+   ```
+
+   PostgreSQL startup checks that the current Alembic revision is installed.
+   Back up existing data before the first migration; the initial migration
+   preserves legacy jobs by assigning them to the legacy owner.
 6. To prepare multi-user accounts, configure the SMTP host, port, sender and
    optional SMTP username/password. `MT5_SMTP_USE_SSL=1` uses implicit TLS
    (usually port 465); set it to `0` to require STARTTLS (usually port 587).
@@ -36,6 +46,19 @@ in the browser, source control, or chat.
    unrecoverable.
 7. Keep `MT5_API_HOST=127.0.0.1`. The application must not be directly exposed
    on a public interface.
+
+After setting the environment values and applying the database migration, run
+the deployment preflight before starting the API:
+
+```powershell
+.\venv\Scripts\python.exe -m app.services.deployment_check --env-file .env
+```
+
+The check reports missing PostgreSQL/schema, HTTPS, SMTP, encryption-key,
+MT5/EA, API-binding, and account-security requirements without printing secret
+values. It does not send an email or enable public registration. SMTP network
+connectivity and login must still be verified through an actual email test
+before opening registration.
 
 ## 2. Add HTTPS reverse proxy
 
@@ -59,7 +82,9 @@ From the project directory, start the API with the virtual-environment Python:
 Open `https://your-domain.example/ui`. In legacy mode, authenticate with
 `MT5_WEB_USERNAME` / `MT5_WEB_PASSWORD`. In account mode, users sign in with
 their verified email and password. User sessions use an HttpOnly, SameSite
-cookie; HTTPS is required.
+cookie; HTTPS is required. The interface supports Vietnamese, English, Korean,
+Japanese, and Thai. The visitor's browser language is used initially when
+available, and their selection is saved in browser storage.
 For local-only preview, `MT5_ALLOW_LOCAL_NO_AUTH=1` skips Basic Auth only when
 both the client and requested host are loopback (`localhost`, `127.0.0.1`, or
 `::1`). Leave this unset on VPS deployments; requests through a public hostname
@@ -104,14 +129,25 @@ matching optimization-range `.set` file or mark at least one numeric parameter
 with `Y`. MQL5 Random Delay follows the platform's documented distribution:
 90% of delays are 0-8 seconds and 10% are 9-18 seconds. It cannot be combined
 with the "Open prices only" tick model; the UI and API both validate this.
+The tester also supports Fixed Delay values from 0 to 100 milliseconds, with
+presets at 0, 5, 10, 50 and 100 ms and a custom integer value in that range.
+Fixed Delay is likewise unavailable with "Open prices only".
 See the [MQL5 Strategy Tester execution-delay documentation](https://www.metatrader5.com/en/terminal/help/algotrading/testing#trade_mode).
 
 Optimization requests are persisted in the configured database and
-processed one at a time by a background worker. The browser polls `/jobs/{id}`
-for queued/running/completed/failed status, queue position, and trial progress.
+processed one at a time by a background worker. Multiple API processes on the
+same Windows host can share the PostgreSQL queue and database-backed rate
+limits. A host-level file lock on the shared jobs directory ensures only one
+worker at a time controls the portable MT5 terminal. All API processes must use
+the same database, jobs directory, and encryption key. The browser polls
+`/jobs/{id}` for queued/running/completed/failed status, queue position, and trial progress.
 The system status panel refreshes the total queue count every 15 seconds. A
 running job is marked failed after an application restart; queued jobs are
 resumed. Uploaded input files are removed when a job finishes.
+The interface also shows the 20 most recent jobs belonging to the signed-in
+account, including status, trial progress, errors, and available result/report
+downloads. The `/jobs` API supports bounded pagination for clients that need
+older history.
 
 To protect a single VPS, each job is capped at 100 trials, at most five jobs
 may wait in the queue, and each client IP may submit at most three optimization
@@ -119,11 +155,12 @@ requests per minute. Requests exceeding a limit receive HTTP 429; queued jobs
 and trial limits apply to all authenticated users. Behind Caddy, rate limiting
 uses the client IP forwarded by the trusted local reverse proxy.
 
-The current implementation supports per-account data ownership but still runs
-one in-process worker against one portable MT5 terminal. Run exactly one API
-process; multiple Uvicorn workers would each start a worker and could race for
-the same MT5 terminal. Rate limits are also process-local, so do not scale out
-API processes yet. Do not expose the service without HTTPS. MT5 symbol discovery
+The worker lock is local to one Windows host and one shared jobs directory; it
+does not coordinate workers on separate machines. Do not scale MT5 workers
+across hosts or point multiple hosts at the same portable terminal. API
+processes may be scaled on the same host only when they share the database and
+job files. This is not a multi-host deployment or a claim of load-tested
+capacity. Do not expose the service without HTTPS. MT5 symbol discovery
 requires that the portable terminal is not already running; the app then
 resolves the uploaded set file's `CurrencyList` against symbols supplied by
 the configured broker.

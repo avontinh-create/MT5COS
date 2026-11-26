@@ -60,7 +60,14 @@ class OptimizerWebValidationTests(unittest.TestCase):
             self.assertFalse(main._is_local_preview_request(external_request))
             self.assertFalse(main._is_local_preview_request(forwarded_request))
 
-    def _post(self, *, model=0, execution_mode=0, optimization_file=None):
+    def _post(
+        self,
+        *,
+        model=0,
+        execution_mode=0,
+        execution_delay_ms=0,
+        optimization_file=None,
+    ):
         files = {
             "file": (
                 "base.set",
@@ -98,6 +105,7 @@ class OptimizerWebValidationTests(unittest.TestCase):
                     "leverage": "100",
                     "model": str(model),
                     "execution_mode": str(execution_mode),
+                    "execution_delay_ms": str(execution_delay_ms),
                 },
             )
         return response, submit
@@ -116,6 +124,40 @@ class OptimizerWebValidationTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
         self.assertIn("Random Delay", response.json()["detail"])
+        submit.assert_not_called()
+
+    def test_fixed_delay_is_queued_and_persisted_in_job_config(self):
+        response, submit = self._post(
+            execution_mode=2,
+            execution_delay_ms=37,
+            optimization_file=b"Param=5||1||1||9||Y\n",
+        )
+
+        self.assertEqual(response.status_code, 202)
+        config = submit.call_args.args[1]
+        self.assertEqual(config["execution_mode"], 2)
+        self.assertEqual(config["execution_delay_ms"], 37)
+
+    def test_fixed_delay_is_limited_to_100_milliseconds(self):
+        response, submit = self._post(
+            execution_mode=2,
+            execution_delay_ms=101,
+            optimization_file=b"Param=5||1||1||9||Y\n",
+        )
+
+        self.assertEqual(response.status_code, 422)
+        submit.assert_not_called()
+
+    def test_fixed_delay_is_rejected_with_open_prices_only(self):
+        response, submit = self._post(
+            model=2,
+            execution_mode=2,
+            execution_delay_ms=10,
+            optimization_file=b"Param=5||1||1||9||Y\n",
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("Execution delays", response.json()["detail"])
         submit.assert_not_called()
 
     def test_matching_optimization_ranges_can_be_queued(self):

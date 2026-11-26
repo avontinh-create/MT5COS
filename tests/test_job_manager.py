@@ -3,6 +3,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 from app.services.ai_engine.job_manager import (
     JobQueueFullError,
@@ -27,6 +28,122 @@ class OptimizationJobManagerTests(unittest.TestCase):
                 manager.submit("second", {"job_id": "second"}, 1)
 
             self.assertEqual(manager.store.queued_count(), 1)
+
+    def test_concurrent_claimers_can_only_claim_a_job_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = JobStore(Path(directory) / "jobs.sqlite3")
+            store.create("one-job", {"job_id": "one-job"}, 1)
+
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                claims = list(executor.map(lambda _: store.claim_next_job(), range(8)))
+
+            claimed_jobs = [claim for claim in claims if claim is not None]
+            self.assertEqual(len(claimed_jobs), 1)
+            self.assertEqual(claimed_jobs[0]["job_id"], "one-job")
+            self.assertEqual(store.get("one-job")["status"], "running")
+
+    def test_queue_capacity_is_enforced_across_manager_instances(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manager_a = OptimizationJobManager(
+                JobStore(root / "jobs.sqlite3"),
+                root / "jobs",
+                lambda *_: {},
+                maximum_queued_jobs=1,
+            )
+            manager_b = OptimizationJobManager(
+                JobStore(root / "jobs.sqlite3"),
+                root / "jobs",
+                lambda *_: {},
+                maximum_queued_jobs=1,
+            )
+
+            def submit(manager, job_id):
+                try:
+                    manager.submit(job_id, {"job_id": job_id}, 1)
+                    return "accepted"
+                except JobQueueFullError:
+                    return "full"
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                results = list(
+                    executor.map(
+                        lambda args: submit(*args),
+                        ((manager_a, "first"), (manager_b, "second")),
+                    )
+                )
+
+            self.assertCountEqual(results, ["accepted", "full"])
+            self.assertEqual(manager_a.store.queued_count(), 1)
+
+    def test_queued_job_can_be_processed_by_another_manager_instance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = JobStore(root / "jobs.sqlite3")
+            submitted_by = OptimizationJobManager(
+                store, root / "jobs", lambda *_: {}
+            )
+            finished = threading.Event()
+            processed = []
+            active_workers = 0
+            maximum_active_workers = 0
+            state_lock = threading.Lock()
+
+            def execute(config, progress):
+                nonlocal active_workers, maximum_active_workers
+                with state_lock:
+                    active_workers += 1
+                    maximum_active_workers = max(
+                        maximum_active_workers, active_workers
+                    )
+                time.sleep(0.05)
+                with state_lock:
+                    processed.append(config["job_id"])
+                    active_workers -= 1
+                    if len(processed) == 2:
+                        finished.set()
+                return {"best_value": 1.0}
+
+            serving_managers = [
+                OptimizationJobManager(
+                    JobStore(root / "jobs.sqlite3"),
+                    root / "jobs",
+                    execute,
+                )
+                for _ in range(2)
+            ]
+            for job_id in ("cross-process-job-1", "cross-process-job-2"):
+                submitted_by.submit(job_id, {"job_id": job_id}, 1)
+
+            for manager in serving_managers:
+                manager.start()
+            try:
+                self.assertTrue(
+                    finished.wait(5), "The durable queued jobs were not processed."
+                )
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    jobs = [
+                        manager.get("cross-process-job-1")
+                        for manager in serving_managers
+                    ]
+                    job = jobs[0]
+                    second_job = serving_managers[0].get("cross-process-job-2")
+                    if (
+                        job["status"] == "completed"
+                        and second_job["status"] == "completed"
+                    ):
+                        break
+                    time.sleep(0.01)
+                self.assertCountEqual(
+                    processed, ["cross-process-job-1", "cross-process-job-2"]
+                )
+                self.assertEqual(maximum_active_workers, 1)
+                self.assertEqual(job["status"], "completed")
+                self.assertEqual(second_job["status"], "completed")
+            finally:
+                for manager in serving_managers:
+                    manager.stop()
 
     def test_reports_queue_position_and_running_job_count(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -110,8 +227,13 @@ class OptimizationJobManagerTests(unittest.TestCase):
 
             manager = OptimizationJobManager(store, root / "jobs", lambda *_: {})
             manager.start()
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                job = manager.get("interrupted")
+                if job["status"] == "failed":
+                    break
+                time.sleep(0.01)
             manager.stop()
-            job = manager.get("interrupted")
 
             self.assertEqual(job["status"], "failed")
             self.assertIn("restarted", job["error"])

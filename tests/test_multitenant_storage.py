@@ -18,6 +18,7 @@ class MultiTenantStorageTests(unittest.TestCase):
     def test_postgres_url_uses_installed_psycopg_driver(self):
         with (
             patch("app.services.database.metadata.create_all"),
+            patch.object(Database, "_initialize_database_mutex"),
             patch.object(Database, "_add_user_recovery_columns"),
             patch.object(Database, "_add_legacy_job_owner_column"),
         ):
@@ -82,6 +83,39 @@ class MultiTenantStorageTests(unittest.TestCase):
                 self.assertEqual(legacy_owner, main.LEGACY_USER_ID)
             finally:
                 database.engine.dispose()
+
+    def test_existing_unowned_jobs_are_assigned_to_the_legacy_owner(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "unowned.sqlite3"
+            initial_database = Database(database_path)
+            try:
+                with initial_database.engine.begin() as connection:
+                    connection.execute(
+                        text(
+                            """
+                            INSERT INTO optimization_jobs
+                                (job_id, user_id, status, created_at, updated_at,
+                                 total_trials, config_json)
+                            VALUES ('unowned-job', NULL, 'completed', 'now',
+                                    'now', 1, '{}')
+                            """
+                        )
+                    )
+            finally:
+                initial_database.engine.dispose()
+
+            upgraded_database = Database(database_path)
+            try:
+                with upgraded_database.engine.connect() as connection:
+                    owner = connection.execute(
+                        text(
+                            "SELECT user_id FROM optimization_jobs "
+                            "WHERE job_id = 'unowned-job'"
+                        )
+                    ).scalar_one()
+                self.assertEqual(owner, "__legacy__")
+            finally:
+                upgraded_database.engine.dispose()
 
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -149,6 +183,26 @@ class MultiTenantStorageTests(unittest.TestCase):
             )
         )
 
+    def test_recent_jobs_are_scoped_and_paginated_by_owner(self):
+        for job_id, user_id in (
+            ("a-old", self.user_a),
+            ("a-new", self.user_a),
+            ("b-only", self.user_b),
+        ):
+            self.job_store.create(job_id, {"job_id": job_id}, 1, user_id)
+
+        self.assertEqual(
+            [job["job_id"] for job in self.job_store.list_recent(self.user_a, limit=1)],
+            ["a-new"],
+        )
+        self.assertEqual(
+            [
+                job["job_id"]
+                for job in self.job_store.list_recent(self.user_b, limit=10)
+            ],
+            ["b-only"],
+        )
+
     def test_mt5_password_is_encrypted_in_database(self):
         key = Fernet.generate_key().decode("ascii")
         with patch.dict("os.environ", {"MT5_CREDENTIAL_ENCRYPTION_KEY": key}):
@@ -212,6 +266,13 @@ class MultiTenantStorageTests(unittest.TestCase):
             with (
                 patch.dict("os.environ", environment),
                 patch.object(main, "send_account_email") as send_email,
+                patch.object(
+                    main,
+                    "recovery_rate_limiter",
+                    main.OptimizationRateLimiter(
+                        limit=5, window_seconds=60 * 60
+                    ),
+                ),
                 TestClient(main.app) as client,
             ):
                 known = client.post(
@@ -299,6 +360,12 @@ class MultiTenantStorageTests(unittest.TestCase):
                 "excel_reports": [{"filename": report_filename}],
             },
         )
+        self.job_store.create(
+            "other-users-job",
+            {"user_id": self.user_b},
+            1,
+            self.user_b,
+        )
         manager = OptimizationJobManager(
             self.job_store, self.root / "jobs", lambda *_: {}
         )
@@ -321,6 +388,17 @@ class MultiTenantStorageTests(unittest.TestCase):
                 client.cookies.set(main.SESSION_COOKIE_NAME, token_a)
                 own_response = client.get("/jobs/private-job")
                 self.assertEqual(own_response.status_code, 200)
+                history_response = client.get("/jobs?limit=10")
+                self.assertEqual(history_response.status_code, 200)
+                self.assertEqual(
+                    [job["job_id"] for job in history_response.json()["jobs"]],
+                    ["private-job"],
+                )
+                self.assertEqual(
+                    history_response.json()["jobs"][0]["result"]["best_set_file"],
+                    set_filename,
+                )
+                self.assertFalse(history_response.json()["has_more"])
                 self.assertEqual(
                     client.get(f"/results/{set_filename}").status_code, 200
                 )
@@ -332,6 +410,12 @@ class MultiTenantStorageTests(unittest.TestCase):
                 client.cookies.set(main.SESSION_COOKIE_NAME, token_b)
                 other_response = client.get("/jobs/private-job")
                 self.assertEqual(other_response.status_code, 404)
+                history_response = client.get("/jobs?limit=10")
+                self.assertEqual(history_response.status_code, 200)
+                self.assertEqual(
+                    [job["job_id"] for job in history_response.json()["jobs"]],
+                    ["other-users-job"],
+                )
                 self.assertEqual(
                     client.get(f"/results/{set_filename}").status_code, 404
                 )

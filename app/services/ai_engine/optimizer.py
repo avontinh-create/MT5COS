@@ -178,6 +178,7 @@ class AIOptimizer:
         leverage: int = 100,
         model: int = 1,
         execution_mode: int = 0,
+        execution_delay_ms: int = 0,
     ) -> float:
         new_values = {}
         for key, limits in self.optimizable_params.items():
@@ -250,6 +251,7 @@ class AIOptimizer:
                 leverage=leverage,
                 model=model,
                 execution_mode=execution_mode,
+                execution_delay_ms=execution_delay_ms,
             )
 
             if not self.runner.run_backtest(
@@ -295,6 +297,7 @@ class AIOptimizer:
         leverage: int = 100,
         model: int = 1,
         execution_mode: int = 0,
+        execution_delay_ms: int = 0,
         progress_callback: Callable[[int, int, float | None], None] | None = None,
     ) -> dict:
         if not self.base_set_data or not self.optimizable_params:
@@ -323,13 +326,20 @@ class AIOptimizer:
             raise ValueError(
                 "Tester model must be 0, 1, 2, or 4 for financial testing."
             )
-        if execution_mode not in {0, 1}:
+        if execution_mode not in {0, 1, 2}:
             raise ValueError(
-                "Execution mode must be 0 (No Delay) or 1 (Random Delay)."
+                "Execution mode must be 0 (No Delay), 1 (Random Delay), "
+                "or 2 (Fixed Delay)."
             )
+        if not 0 <= execution_delay_ms <= 100:
+            raise ValueError("Fixed execution delay must be between 0 and 100 ms.")
         if execution_mode == 1 and model == 2:
             raise ValueError(
                 "MQL5 Random Delay cannot be used with Open prices only."
+            )
+        if execution_mode == 2 and model == 2:
+            raise ValueError(
+                "Fixed execution delay cannot be used with Open prices only."
             )
 
         run_id = uuid.uuid4().hex
@@ -372,6 +382,7 @@ class AIOptimizer:
                 leverage,
                 model,
                 execution_mode,
+                execution_delay_ms,
             ),
             n_trials=n_trials,
             callbacks=[update_progress],
