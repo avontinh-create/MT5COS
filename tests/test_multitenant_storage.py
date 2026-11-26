@@ -8,7 +8,7 @@ from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from sqlalchemy import inspect, text
 
-import main
+from app.api import application as main
 from app.services.ai_engine.job_manager import JobStore, OptimizationJobManager
 from app.services.auth_store import AuthStore
 from app.services.database import Database

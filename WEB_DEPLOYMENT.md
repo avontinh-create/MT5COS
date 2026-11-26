@@ -79,6 +79,10 @@ From the project directory, start the API with the virtual-environment Python:
 .\venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 9000
 ```
 
+`main.py` is the application entry point. API paths, methods, and OpenAPI tags
+are registered in `app/api/router.py`; endpoint handlers and application
+services are in `app/api/application.py`.
+
 Open `https://your-domain.example/ui`. In legacy mode, authenticate with
 `MT5_WEB_USERNAME` / `MT5_WEB_PASSWORD`. In account mode, users sign in with
 their verified email and password. User sessions use an HttpOnly, SameSite

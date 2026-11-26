@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-import main
+from app.api import application as main
 
 
 class OptimizerWebValidationTests(unittest.TestCase):
