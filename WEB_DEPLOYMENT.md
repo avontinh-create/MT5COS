@@ -67,7 +67,7 @@ to point to the VPS. Copy `Caddyfile.example` to `Caddyfile`, replacing
 `your-domain.example` with the real domain. Start Caddy as a Windows service
 using the Caddy service installation procedure.
 
-Allow inbound TCP ports 80 and 443 for Caddy and keep port 8000 blocked from
+Allow inbound TCP ports 80 and 443 for Caddy and keep port 9000 blocked from
 external networks. Caddy obtains and renews the HTTPS certificate. Only use
 the application through `https://your-domain.example`.
 
@@ -76,7 +76,7 @@ the application through `https://your-domain.example`.
 From the project directory, start the API with the virtual-environment Python:
 
 ```powershell
-.\venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000
+.\venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 9000
 ```
 
 Open `https://your-domain.example/ui`. In legacy mode, authenticate with
